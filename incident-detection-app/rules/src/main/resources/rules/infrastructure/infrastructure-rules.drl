@@ -1,0 +1,104 @@
+// =====================================================================
+// Pravila: Infrastructure & UBA  —  Avanesov Roman (SV88/2024)
+// Napredne tehnike: Templates + CEP (Templates u sledećoj iteraciji)
+// Domen: performans/resource exhaustion + per-host load monitoring
+// =====================================================================
+package rules.infrastructure;
+
+import com.ftn.sbnz.model.Host;
+import com.ftn.sbnz.model.MetricEvent;
+import com.ftn.sbnz.model.MetricEvent.MetricType;
+import com.ftn.sbnz.model.HighCPU;
+import com.ftn.sbnz.model.HighMemory;
+import com.ftn.sbnz.model.ResourceExhaustion;
+import com.ftn.sbnz.model.SustainedHighLoad;
+import com.ftn.sbnz.model.IncidentSeverity;
+import com.ftn.sbnz.model.Alert;
+import com.ftn.sbnz.model.Alert.Level;
+
+// =========================================================
+// R1.1 — Nivo 1: Klasifikacija (HighCPU)
+// cpuUsage > 90% -> insert(HighCPU)
+// =========================================================
+rule "R1.1 HighCPU"
+    when
+        $m: MetricEvent(metricType == MetricType.CPU_USAGE, value > 90, $h: hostId)
+        not HighCPU(hostId == $h)
+    then
+        System.out.println("[R1.1] HighCPU on " + $h + " (cpu=" + $m.getValue() + "%)");
+        insert(new HighCPU($h, $m.getValue()));
+end
+
+// =========================================================
+// R1.2 — Nivo 1: Klasifikacija (HighMemory)
+// memUsage > 95% -> insert(HighMemory)
+// =========================================================
+rule "R1.2 HighMemory"
+    when
+        $m: MetricEvent(metricType == MetricType.MEMORY_USAGE, value > 95, $h: hostId)
+        not HighMemory(hostId == $h)
+    then
+        System.out.println("[R1.2] HighMemory on " + $h + " (mem=" + $m.getValue() + "%)");
+        insert(new HighMemory($h, $m.getValue()));
+end
+
+// =========================================================
+// R2.1 — Nivo 2: Korelacija (ResourceExhaustion)
+// HighCPU AND HighMemory -> insert(ResourceExhaustion); severity += 20
+// =========================================================
+rule "R2.1 ResourceExhaustion"
+    when
+        HighCPU($h: hostId)
+        HighMemory(hostId == $h)
+        not ResourceExhaustion(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.1] ResourceExhaustion on " + $h + " (severity +20)");
+        insert(new ResourceExhaustion($h));
+        modify($sev) { add(20) }
+end
+
+// =========================================================
+// R3.2 — Nivo 3: Vremenski obrazac — accumulate
+// AVG(cpuUsage) preko sliding window-a od 30 minuta > 85%
+// -> insert(SustainedHighLoad); severity += 20
+// =========================================================
+rule "R3.2 SustainedHighLoad (accumulate over 30min)"
+    when
+        $host: Host($h: id)
+        $avg: Number(doubleValue > 85) from accumulate(
+            MetricEvent(
+                metricType == MetricType.CPU_USAGE,
+                hostId == $h,
+                $v: value
+            ) over window:time(30m),
+            average($v)
+        )
+        not SustainedHighLoad(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.2] SustainedHighLoad on " + $h
+                + " (avgCPU=" + String.format("%.1f", $avg.doubleValue()) + "% u zadnjih 30min, severity +20)");
+        insert(new SustainedHighLoad($h, $avg.doubleValue()));
+        modify($sev) { add(20) }
+end
+
+// =========================================================
+// R4.4 — Nivo 4: Odluka — MEDIUM Alert
+// severity u [30, 60) -> insert Alert(MEDIUM)
+// =========================================================
+rule "R4.4 MEDIUM Alert"
+    salience 10
+    when
+        $sev: IncidentSeverity($h: hostId, score >= 30, score < 60)
+        not Alert(hostId == $h)
+    then
+        System.out.println("[R4.4] MEDIUM Alert on " + $h + " (severity=" + $sev.getScore() + ")");
+        System.out.println("       -> notifyOncall()");
+        insert(new Alert(
+            $h,
+            Level.MEDIUM,
+            $sev.getScore(),
+            "MEDIUM incident on host " + $h + " — oncall notified"
+        ));
+end
