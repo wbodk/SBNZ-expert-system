@@ -1,0 +1,130 @@
+// =====================================================================
+// Pravila: Security & Diagnostics  —  Roman Minakov (SV83/2023)
+// Napredne tehnike: CEP + Backward chaining (BC u sledećoj iteraciji)
+// Scenarij: A — DDoS + Compromised Account (spec_latest.md §2.1)
+// =====================================================================
+package rules.security;
+
+import com.ftn.sbnz.model.Host;
+import com.ftn.sbnz.model.MetricEvent;
+import com.ftn.sbnz.model.MetricEvent.MetricType;
+import com.ftn.sbnz.model.LoginAttemptEvent;
+import com.ftn.sbnz.model.ServiceDown;
+import com.ftn.sbnz.model.TrafficSpike;
+import com.ftn.sbnz.model.BruteForceAttempt;
+import com.ftn.sbnz.model.PotentialDDoS;
+import com.ftn.sbnz.model.DDoSPattern;
+import com.ftn.sbnz.model.IncidentSeverity;
+import com.ftn.sbnz.model.Alert;
+import com.ftn.sbnz.model.Alert.Level;
+
+// Helper koji koriste oba modula — inicijalizuje severity brojač po hostu.
+// Smešten u security paket; rules cross-package matchuju činjenice bez problema.
+rule "Init severity per host"
+    salience 100
+    when
+        $h: Host($id: id)
+        not IncidentSeverity(hostId == $id)
+    then
+        insert(new IncidentSeverity($id, 0));
+        System.out.println("[INIT] Severity counter za host " + $id);
+end
+
+// =========================================================
+// R1.6 — Nivo 1: Klasifikacija (BruteForceAttempt) — accumulate
+// Više od 5 neuspešnih prijava u prozoru od 1 minuta.
+// =========================================================
+rule "R1.6 BruteForceAttempt (accumulate)"
+    when
+        $l1: LoginAttemptEvent(success == false, $h: hostId)
+        $count: Number(intValue > 5) from accumulate(
+            $l2: LoginAttemptEvent(
+                hostId == $h,
+                success == false,
+                this after[0s, 1m] $l1
+            ),
+            count($l2)
+        )
+        not BruteForceAttempt(hostId == $h)
+    then
+        System.out.println("[R1.6] BruteForceAttempt on " + $h + " (failed=" + $count + ")");
+        insert(new BruteForceAttempt($h, $count.longValue()));
+end
+
+// =========================================================
+// R2.4 — Nivo 2: Korelacija (PotentialDDoS)
+// TrafficSpike + ServiceDown za isti host -> PotentialDDoS, severity += 30
+// =========================================================
+rule "R2.4 PotentialDDoS"
+    when
+        $traffic: MetricEvent(
+            metricType == MetricType.NETWORK_TRAFFIC_MBPS,
+            value > 500,
+            $h: hostId
+        )
+        $down: MetricEvent(
+            metricType == MetricType.SERVICE_AVAILABILITY,
+            value == 0,
+            hostId == $h
+        )
+        not PotentialDDoS(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.4] PotentialDDoS on " + $h + " (severity +30)");
+        insert(new TrafficSpike($h, $traffic.getValue(), 50.0));
+        insert(new ServiceDown($h));
+        insert(new PotentialDDoS($h));
+        modify($sev) { add(30) }
+end
+
+// =========================================================
+// R3.4 — Nivo 3: CEP — DDoSPattern
+// TrafficSpike + ServiceDown + HighCPU u istom hostu u roku od 2 minuta.
+// severity += 45
+// =========================================================
+rule "R3.4 DDoSPattern (CEP)"
+    when
+        $traffic: MetricEvent(
+            metricType == MetricType.NETWORK_TRAFFIC_MBPS,
+            value > 500,
+            $h: hostId
+        )
+        $down: MetricEvent(
+            metricType == MetricType.SERVICE_AVAILABILITY,
+            value == 0,
+            hostId == $h,
+            this after[0s, 2m] $traffic
+        )
+        $cpu: MetricEvent(
+            metricType == MetricType.CPU_USAGE,
+            value > 90,
+            hostId == $h,
+            this after[0s, 2m] $traffic
+        )
+        not DDoSPattern(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.4] DDoSPattern (CEP) on " + $h + " — u roku od 2min (severity +45)");
+        insert(new DDoSPattern($h));
+        modify($sev) { add(45) }
+end
+
+// =========================================================
+// R4.6 — Nivo 4: Odluka — CRITICAL Alert
+// severity >= 85 -> insert Alert(CRITICAL)
+// =========================================================
+rule "R4.6 CRITICAL Alert"
+    salience 20
+    when
+        $sev: IncidentSeverity($h: hostId, score >= 85)
+        not Alert(hostId == $h, level == Level.CRITICAL)
+    then
+        System.out.println("[R4.6] CRITICAL Alert on " + $h + " (severity=" + $sev.getScore() + ")");
+        System.out.println("       -> isolateHost(" + $h + "); notifyManagement(); activateIRP()");
+        insert(new Alert(
+            $h,
+            Level.CRITICAL,
+            $sev.getScore(),
+            "CRITICAL incident on host " + $h + " — isolation + IRP activated"
+        ));
+end
