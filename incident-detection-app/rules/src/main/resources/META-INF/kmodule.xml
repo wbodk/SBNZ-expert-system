@@ -1,0 +1,8 @@
+<kmodule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://jboss.org/kie/6.0.0/kmodule">
+    <!-- Jedna kbase obuhvata pravila oba člana tima (security + infrastructure).
+         Stream mode i pseudo-clock — potrebno za CEP/accumulate sa vremenskim prozorima. -->
+    <kbase name="incidentKbase" eventProcessingMode="stream"
+           packages="rules.security,rules.infrastructure">
+        <ksession name="incidentKsession" clockType="pseudo"/>
+    </kbase>
+</kmodule>

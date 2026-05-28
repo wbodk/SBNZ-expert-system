@@ -1,0 +1,182 @@
+@startuml SBNZ Class Diagram — Domaći 3
+'==================================================================
+' Klasni dijagram modela podataka — Domaći 3
+' Projekat: Sistem za upravljanje IT infrastrukturom
+'
+' Renderovanje:
+'   • IntelliJ / VS Code: PlantUML plugin → Alt+D (preview)
+'   • Online:             https://www.plantuml.com/plantuml/
+'   • CLI:                plantuml za_domaci_3.puml  → za_domaci_3.png
+'==================================================================
+
+skinparam classAttributeIconSize 0
+skinparam classFontStyle bold
+skinparam packageStyle rectangle
+skinparam shadowing false
+hide circle
+hide empty members
+
+'------------------------------------------------------------------
+' Enumeracije
+'------------------------------------------------------------------
+enum Tier {
+    TIER_1
+    TIER_2
+    TIER_3
+}
+
+enum MetricType {
+    CPU_USAGE
+    MEMORY_USAGE
+    DISK_USAGE
+    NETWORK_TRAFFIC_MBPS
+    SERVICE_AVAILABILITY
+    SERVICE_RESPONSE_TIME_MS
+}
+
+enum Level {
+    LOW
+    MEDIUM
+    HIGH
+    CRITICAL
+}
+
+'------------------------------------------------------------------
+' Konfiguracija
+'------------------------------------------------------------------
+package "Konfiguracija" <<Rectangle>> {
+    class Host {
+        +id : String
+        +hostname : String
+        +tier : Tier
+    }
+}
+
+'------------------------------------------------------------------
+' Ulazni događaji (Drools @Role(EVENT))
+'------------------------------------------------------------------
+package "Ulazni događaji" <<Rectangle>> {
+    class MetricEvent <<event>> {
+        +hostId : String
+        +metricType : MetricType
+        +value : double
+        +timestamp : Date
+    }
+
+    class LoginAttemptEvent <<event>> {
+        +hostId : String
+        +userId : String
+        +sourceIp : String
+        +success : boolean
+        +timestamp : Date
+    }
+}
+
+'------------------------------------------------------------------
+' Nivo 1 — Klasifikacija
+'------------------------------------------------------------------
+package "Nivo 1 — Klasifikacija" <<Rectangle>> {
+    class HighCPU {
+        +hostId : String
+        +value : double
+    }
+    class HighMemory {
+        +hostId : String
+        +value : double
+    }
+    class ServiceDown {
+        +hostId : String
+    }
+    class TrafficSpike {
+        +hostId : String
+        +currentMbps : double
+        +baselineMbps : double
+    }
+    class BruteForceAttempt {
+        +hostId : String
+        +failedCount : long
+    }
+}
+
+'------------------------------------------------------------------
+' Nivo 2 — Korelacija
+'------------------------------------------------------------------
+package "Nivo 2 — Korelacija" <<Rectangle>> {
+    class ResourceExhaustion {
+        +hostId : String
+    }
+    class PotentialDDoS {
+        +hostId : String
+    }
+}
+
+'------------------------------------------------------------------
+' Nivo 3 — Vremenski obrasci (CEP + accumulate)
+'------------------------------------------------------------------
+package "Nivo 3 — Vremenski obrasci" <<Rectangle>> {
+    class SustainedHighLoad {
+        +hostId : String
+        +avgValue : double
+    }
+    class DDoSPattern {
+        +hostId : String
+    }
+}
+
+'------------------------------------------------------------------
+' Nivo 4 — Odluka
+'------------------------------------------------------------------
+package "Nivo 4 — Odluka" <<Rectangle>> {
+    class IncidentSeverity {
+        +hostId : String
+        +score : int
+        +add(delta : int) : void
+    }
+    class Alert {
+        +hostId : String
+        +level : Level
+        +severity : int
+        +description : String
+    }
+}
+
+'------------------------------------------------------------------
+' Asocijacije sa enumeracijama
+'------------------------------------------------------------------
+Host --> Tier
+MetricEvent --> MetricType
+Alert --> Level
+
+'------------------------------------------------------------------
+' Tok pravila (forward chaining) — isprekidane strelice
+'------------------------------------------------------------------
+MetricEvent ..> HighCPU         : R1.1
+MetricEvent ..> HighMemory      : R1.2
+LoginAttemptEvent ..> BruteForceAttempt : R1.6\naccumulate
+
+HighCPU ..> ResourceExhaustion  : R2.1
+HighMemory ..> ResourceExhaustion : R2.1
+MetricEvent ..> PotentialDDoS   : R2.4
+MetricEvent ..> TrafficSpike    : R2.4
+MetricEvent ..> ServiceDown     : R2.4
+
+MetricEvent ..> SustainedHighLoad : R3.2\naccumulate AVG
+MetricEvent ..> DDoSPattern     : R3.4\nCEP (≤2 min)
+
+PotentialDDoS ..> IncidentSeverity : +30
+DDoSPattern ..> IncidentSeverity   : +45
+ResourceExhaustion ..> IncidentSeverity : +20
+SustainedHighLoad ..> IncidentSeverity  : +20
+
+IncidentSeverity ..> Alert      : R4.4 [30,60) → MEDIUM\nR4.6 ≥85 → CRITICAL
+
+'------------------------------------------------------------------
+' Napomena: sve činjenice referenciraju Host preko polja hostId.
+'------------------------------------------------------------------
+note bottom of Host
+  Sve činjenice (HighCPU, ServiceDown, Alert, ...)
+  referenciraju Host preko polja **hostId : String**.
+  Veze nisu iscrtane radi čitljivosti.
+end note
+
+@enduml

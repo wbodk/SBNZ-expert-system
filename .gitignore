@@ -1,1 +1,39 @@
-ignore
+# Local user-only folder (PDFs, examples, notes — see ignore/)
+ignore/
+
+# Scratch / clipboard area (commit drafts, etc.)
+tmp/
+
+# macOS
+.DS_Store
+
+# Maven build output
+**/target/
+
+# Spring Boot / Maven help files from generated template
+**/HELP.md
+
+# Editor / IDE
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+**/build/
+
+# Logs
+*.log
