@@ -25,11 +25,28 @@ scripts/                       build.sh / test.sh / run.sh
 
 ## Pokretanje
 
+### Docker (preporučeno — backend + klijent zajedno)
+
+```bash
+docker compose up --build
+```
+
+- Klijent:  http://localhost:4200
+- REST API: http://localhost:8080/api
+
+Klijent (nginx) prosleđuje `/api` zahteve na backend kontejner, pa nema CORS-a
+ni potrebe za lokalno instaliranim Java/Node alatima. Zaustavljanje:
+`docker compose down`.
+
+> Backend image je multi-stage Maven build → izvršni Spring Boot jar; Drools
+> kbase se učitava sa klasapata (`newKieClasspathContainer`), bez `~/.m2`.
+> Klijent image je Angular build serviran nginx-om.
+
 ### Backend (Spring Boot + Drools)
 
 ```bash
 ./scripts/build.sh   # mvn clean install (skipTests)
-./scripts/test.sh    # 30 JUnit testova
+./scripts/test.sh    # 32 JUnit testova
 ./scripts/run.sh     # REST servis na http://localhost:8080
 ```
 
@@ -107,17 +124,23 @@ pokreće pravila automatski — pozvati `POST /api/fire` (scenario runner ubaci 
 
 ## Scenariji (spec §2)
 
-| Scenario | Host | Očekivano |
-|---|---|---|
-| **A — DDoS + Compromised Account** | web-01 (TIER_1) | brute force + blacklist login + DDoS obrazac → **CRITICAL**, `lockAccount`/`isolateHost` |
-| **B — Insider Threat + Data Exfiltration** | fs-01 (TIER_1, PCI) | UBA anomalija + pristup PCI podacima + outbound spike → **CRITICAL (severity 315)**, `revokeAccess`/`blockOutboundTraffic`/`notifyCompliance_PCI` |
+Dostupni preko `GET /api/scenarios` i pokreću se `POST /api/scenarios/{id}/run`
+(ili iz dropdown-a u klijentu). Zajedno pokrivaju sva 4 nivoa, CEP kill-chain-ove,
+UBA, backward chaining i sve tri XLS tabele.
 
-## Testovi (30)
+| Scenario | Host(ovi) | Očekivano |
+|---|---|---|
+| **A — DDoS + Compromised Account** | web-01 (TIER_1) | brute force + blacklist login + DDoS obrazac → **CRITICAL**, `lockAccount`/`isolateHost`; pokriva R1.6–R1.8, R2.3/R2.4/R2.6, R3.1/R3.4/R3.5/R3.11, PerServiceThresholds(web) |
+| **B — Insider Threat + Data Exfiltration** | fs-01 (TIER_1, PCI) | UBA anomalija + pristup PCI podacima van radnog vremena + outbound spike → **CRITICAL (315)**, `revokeAccess`/`blockOutboundTraffic`/`notifyCompliance_PCI`; pokriva R1.9/R1.11–R1.13, R2.7/R2.8/R2.10, R3.8/R3.12/R3.13 |
+| **C — Ransomware Activity** | fs-02 (TIER_1, HIPAA) | masovna modifikacija fajlova + ServiceDown + visok CPU/RAM/disk → **CRITICAL (360)**, `disableSharedDrives`/`isolateHost`/`notifyCompliance_HIPAA`; pokriva R1.2/R1.3/R1.10/R1.14, R2.1/R2.2/R2.9, R3.10 (Q7 `hasRansomwareRisk`) |
+| **D — Lateral Movement + C2 Beaconing** | app-01/02/03 (TIER_2), c2-01 (TIER_3) | ista blacklist IP na 3 hosta + 6 outbound konekcija ka istom destIP → **2× MEDIUM** (Tier 2 ×1.0 i Tier 3 ×0.7), `blockDestIP`; pokriva R1.7, R3.6, R3.9, R4.11, R4.4 |
+
+## Testovi (32)
 
 - `InfrastructureRulesTest`, `SecurityRulesTest` — forward chaining (Nivo 1–4), pozitivni + negativni (granice, CEP prozor, accumulate prag)
 - `BackwardChainingTest` — rekurzivni query-ji Q1/Q3/Q8
 - `DecisionTableRulesTest` — XLS multiplier, per-service prag, compliance
-- `ScenarioServiceTest` — end-to-end scenariji A i B
+- `ScenarioServiceTest` — end-to-end scenariji A, B, C, D
 - `DecisionTableGeneratorTest` — generiše XLS tabele
 
 ## Pravila po članu tima
