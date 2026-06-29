@@ -18,6 +18,7 @@ public class LoginAttemptEvent implements Serializable {
     private String userId;
     private String sourceIp;
     private boolean success;
+    private int loginHour = -1;  // sat prijave [0-23]; -1 = nepoznat (koristi R2.6)
     private Date timestamp;
 
     public LoginAttemptEvent() {
@@ -28,6 +29,16 @@ public class LoginAttemptEvent implements Serializable {
         this.userId = userId;
         this.sourceIp = sourceIp;
         this.success = success;
+        this.timestamp = timestamp;
+    }
+
+    public LoginAttemptEvent(String hostId, String userId, String sourceIp, boolean success,
+                             int loginHour, Date timestamp) {
+        this.hostId = hostId;
+        this.userId = userId;
+        this.sourceIp = sourceIp;
+        this.success = success;
+        this.loginHour = loginHour;
         this.timestamp = timestamp;
     }
 
@@ -61,6 +72,14 @@ public class LoginAttemptEvent implements Serializable {
 
     public void setSuccess(boolean success) {
         this.success = success;
+    }
+
+    public int getLoginHour() {
+        return loginHour;
+    }
+
+    public void setLoginHour(int loginHour) {
+        this.loginHour = loginHour;
     }
 
     public Date getTimestamp() {
