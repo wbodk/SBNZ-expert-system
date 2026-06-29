@@ -1,7 +1,8 @@
 // =====================================================================
 // Pravila: Security & Diagnostics  —  Roman Minakov (SV83/2023)
-// Napredne tehnike: CEP + Backward chaining (BC u sledećoj iteraciji)
+// Napredne tehnike: CEP (kill chain) + Backward chaining (Faza 3)
 // Scenarij: A — DDoS + Compromised Account (spec_latest.md §2.1)
+// Nivoi: 1 (klasifikacija) → 2 (korelacija) → 3 (CEP/accumulate) → 4 (odgovor)
 // =====================================================================
 package rules.security;
 
@@ -9,17 +10,44 @@ import com.ftn.sbnz.model.Host;
 import com.ftn.sbnz.model.MetricEvent;
 import com.ftn.sbnz.model.MetricEvent.MetricType;
 import com.ftn.sbnz.model.LoginAttemptEvent;
-import com.ftn.sbnz.model.ServiceDown;
+import com.ftn.sbnz.model.NetworkConnectionEvent;
+import com.ftn.sbnz.model.BlacklistedIp;
+import com.ftn.sbnz.model.HostBaseline;
+import com.ftn.sbnz.model.UserActivityProfile;
+
 import com.ftn.sbnz.model.TrafficSpike;
+import com.ftn.sbnz.model.SlowService;
+import com.ftn.sbnz.model.ServiceDown;
+import com.ftn.sbnz.model.HighCPU;
+import com.ftn.sbnz.model.SuspiciousIP;
 import com.ftn.sbnz.model.BruteForceAttempt;
+import com.ftn.sbnz.model.SensitiveDataAccess;
+import com.ftn.sbnz.model.OutboundSpike;
+import com.ftn.sbnz.model.MassFileModification;
+
+import com.ftn.sbnz.model.ActiveAttack;
 import com.ftn.sbnz.model.PotentialDDoS;
+import com.ftn.sbnz.model.AnomalousAccess;
+
+import com.ftn.sbnz.model.BruteForcePattern;
 import com.ftn.sbnz.model.DDoSPattern;
+import com.ftn.sbnz.model.CompromisedAccount;
+import com.ftn.sbnz.model.LateralMovement;
+import com.ftn.sbnz.model.DistributedAttack;
+import com.ftn.sbnz.model.DataExfiltration;
+import com.ftn.sbnz.model.C2Beaconing;
+import com.ftn.sbnz.model.RansomwareActivity;
+import com.ftn.sbnz.model.InsiderThreat;
+
 import com.ftn.sbnz.model.IncidentSeverity;
+import com.ftn.sbnz.model.SeverityApplied;
+import com.ftn.sbnz.model.ResponseAction;
 import com.ftn.sbnz.model.Alert;
 import com.ftn.sbnz.model.Alert.Level;
 
-// Helper koji koriste oba modula — inicijalizuje severity brojač po hostu.
-// Smešten u security paket; rules cross-package matchuju činjenice bez problema.
+// ---------------------------------------------------------------------
+// Zajednička osnova — inicijalizacija severity brojača po hostu.
+// ---------------------------------------------------------------------
 rule "Init severity per host"
     salience 100
     when
@@ -30,77 +58,133 @@ rule "Init severity per host"
         System.out.println("[INIT] Severity counter za host " + $id);
 end
 
-// =========================================================
-// R1.6 — Nivo 1: Klasifikacija (BruteForceAttempt) — accumulate
-// Više od 5 neuspešnih prijava u prozoru od 1 minuta.
-// =========================================================
+// =====================================================================
+// NIVO 1 — Klasifikacija događaja
+// =====================================================================
+
+// R1.6 — > 5 neuspešnih prijava u prozoru od 1 min -> BruteForceAttempt
 rule "R1.6 BruteForceAttempt (accumulate)"
     when
         $l1: LoginAttemptEvent(success == false, $h: hostId)
         $count: Number(intValue > 5) from accumulate(
-            $l2: LoginAttemptEvent(
-                hostId == $h,
-                success == false,
-                this after[0s, 1m] $l1
-            ),
+            $l2: LoginAttemptEvent(hostId == $h, success == false, this after[0s, 1m] $l1),
             count($l2)
         )
         not BruteForceAttempt(hostId == $h)
     then
         System.out.println("[R1.6] BruteForceAttempt on " + $h + " (failed=" + $count + ")");
-        insert(new BruteForceAttempt($h, $count.longValue()));
+        insert(new BruteForceAttempt($h, $count.longValue(), $l1.getTimestamp()));
 end
 
-// =========================================================
-// R2.4 — Nivo 2: Korelacija (PotentialDDoS)
-// TrafficSpike + ServiceDown za isti host -> PotentialDDoS, severity += 30
-// =========================================================
+// R1.7 — sourceIP iz blacklist-e -> SuspiciousIP
+rule "R1.7 SuspiciousIP"
+    when
+        $l: LoginAttemptEvent($h: hostId, $ip: sourceIp)
+        BlacklistedIp(ip == $ip)
+        not SuspiciousIP(hostId == $h, sourceIp == $ip)
+    then
+        System.out.println("[R1.7] SuspiciousIP " + $ip + " on " + $h);
+        insert(new SuspiciousIP($h, $ip));
+end
+
+// R1.8 — networkTraffic > 10× baseline -> TrafficSpike (kada postoji HostBaseline)
+rule "R1.8 TrafficSpike (baseline)"
+    when
+        $m: MetricEvent(metricType == MetricType.NETWORK_TRAFFIC_MBPS, $h: hostId, $v: value)
+        $b: HostBaseline(hostId == $h)
+        eval($v > $b.getNetworkBaselineMbps() * 10)
+        not TrafficSpike(hostId == $h)
+    then
+        System.out.println("[R1.8] TrafficSpike on " + $h + " (" + $v + " > 10× baseline "
+                + $b.getNetworkBaselineMbps() + ")");
+        insert(new TrafficSpike($h, $v, $b.getNetworkBaselineMbps()));
+end
+
+// R1.8' — fallback prag kad baseline nije definisan (> 500 Mbps)
+rule "R1.8 TrafficSpike (default)"
+    when
+        $m: MetricEvent(metricType == MetricType.NETWORK_TRAFFIC_MBPS, value > 500, $h: hostId, $v: value)
+        not HostBaseline(hostId == $h)
+        not TrafficSpike(hostId == $h)
+    then
+        System.out.println("[R1.8] TrafficSpike on " + $h + " (" + $v + " > default 500 Mbps)");
+        insert(new TrafficSpike($h, $v, 50.0));
+end
+
+// =====================================================================
+// NIVO 2 — Korelacija događaja
+// =====================================================================
+
+// R2.3 — BruteForceAttempt AND SuspiciousIP -> ActiveAttack; +40
+rule "R2.3 ActiveAttack"
+    when
+        BruteForceAttempt($h: hostId)
+        SuspiciousIP(hostId == $h)
+        not ActiveAttack(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.3] ActiveAttack on " + $h + " (severity +40)");
+        insert(new ActiveAttack($h));
+        modify($sev) { add(40) }
+end
+
+// R2.4 — SlowService AND TrafficSpike -> PotentialDDoS; +30
 rule "R2.4 PotentialDDoS"
     when
-        $traffic: MetricEvent(
-            metricType == MetricType.NETWORK_TRAFFIC_MBPS,
-            value > 500,
-            $h: hostId
-        )
-        $down: MetricEvent(
-            metricType == MetricType.SERVICE_AVAILABILITY,
-            value == 0,
-            hostId == $h
-        )
+        TrafficSpike($h: hostId)
+        SlowService(hostId == $h)
         not PotentialDDoS(hostId == $h)
         $sev: IncidentSeverity(hostId == $h)
     then
         System.out.println("[R2.4] PotentialDDoS on " + $h + " (severity +30)");
-        insert(new TrafficSpike($h, $traffic.getValue(), 50.0));
-        insert(new ServiceDown($h));
         insert(new PotentialDDoS($h));
         modify($sev) { add(30) }
 end
 
-// =========================================================
-// R3.4 — Nivo 3: CEP — DDoSPattern
-// TrafficSpike + ServiceDown + HighCPU u istom hostu u roku od 2 minuta.
-// severity += 45
-// =========================================================
+// R2.6 — loginHour van dozvoljenih sati AND failedLogins > 0 -> AnomalousAccess; +20
+rule "R2.6 AnomalousAccess"
+    when
+        $login: LoginAttemptEvent($h: hostId, $u: userId, loginHour >= 0)
+        $p: UserActivityProfile(userId == $u)
+        eval($login.getLoginHour() < $p.getAllowedHourStart() || $login.getLoginHour() > $p.getAllowedHourEnd())
+        exists LoginAttemptEvent(hostId == $h, success == false)
+        not AnomalousAccess(hostId == $h, userId == $u)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.6] AnomalousAccess: " + $u + " @ " + $login.getLoginHour()
+                + "h on " + $h + " (severity +20)");
+        insert(new AnomalousAccess($h, $u, $login.getTimestamp()));
+        modify($sev) { add(20) }
+end
+
+// =====================================================================
+// NIVO 3 — Vremenski obrasci (accumulate) + CEP kill chain
+// =====================================================================
+
+// R3.1 — COUNT(failedLogins) preko 10min > 50 -> BruteForcePattern; +30 (accumulate)
+rule "R3.1 BruteForcePattern (accumulate over 10min)"
+    when
+        $l1: LoginAttemptEvent(success == false, $h: hostId)
+        $count: Number(intValue > 50) from accumulate(
+            $l2: LoginAttemptEvent(hostId == $h, success == false, this after[0s, 10m] $l1),
+            count($l2)
+        )
+        not BruteForcePattern(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.1] BruteForcePattern on " + $h + " (" + $count + " / 10min, severity +30)");
+        insert(new BruteForcePattern($h, $count.longValue()));
+        modify($sev) { add(30) }
+end
+
+// R3.4 — TrafficSpike + ServiceDown + HighCPU u 2 min (isti host) -> DDoSPattern; +45 (CEP)
 rule "R3.4 DDoSPattern (CEP)"
     when
-        $traffic: MetricEvent(
-            metricType == MetricType.NETWORK_TRAFFIC_MBPS,
-            value > 500,
-            $h: hostId
-        )
-        $down: MetricEvent(
-            metricType == MetricType.SERVICE_AVAILABILITY,
-            value == 0,
-            hostId == $h,
-            this after[0s, 2m] $traffic
-        )
-        $cpu: MetricEvent(
-            metricType == MetricType.CPU_USAGE,
-            value > 90,
-            hostId == $h,
-            this after[0s, 2m] $traffic
-        )
+        $traffic: MetricEvent(metricType == MetricType.NETWORK_TRAFFIC_MBPS, value > 500, $h: hostId)
+        $down: MetricEvent(metricType == MetricType.SERVICE_AVAILABILITY, value == 0,
+                           hostId == $h, this after[0s, 2m] $traffic)
+        $cpu: MetricEvent(metricType == MetricType.CPU_USAGE, value > 90,
+                          hostId == $h, this after[0s, 2m] $traffic)
         not DDoSPattern(hostId == $h)
         $sev: IncidentSeverity(hostId == $h)
     then
@@ -109,22 +193,173 @@ rule "R3.4 DDoSPattern (CEP)"
         modify($sev) { add(45) }
 end
 
-// =========================================================
-// R4.6 — Nivo 4: Odluka — CRITICAL Alert
-// severity >= 85 -> insert Alert(CRITICAL)
-// =========================================================
+// R3.5 — BruteForceAttempt -> AnomalousAccess within 5min -> CompromisedAccount; +50 (CEP)
+rule "R3.5 CompromisedAccount (CEP)"
+    when
+        $bf: BruteForceAttempt($h: hostId)
+        $aa: AnomalousAccess(hostId == $h, $u: userId, this after[0s, 5m] $bf)
+        not CompromisedAccount(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.5] CompromisedAccount (CEP) on " + $h + " user " + $u + " (severity +50)");
+        insert(new CompromisedAccount($h, $u));
+        modify($sev) { add(50) }
+end
+
+// R3.6 — isti SuspiciousIP na 3+ različita servisa -> LateralMovement; +45 (CEP/accumulate)
+rule "R3.6 LateralMovement"
+    when
+        $ip: SuspiciousIP($srcIp: sourceIp, $h: hostId)
+        $hosts: java.util.Set(size >= 3) from accumulate(
+            SuspiciousIP(sourceIp == $srcIp, $hh: hostId),
+            collectSet($hh)
+        )
+        not LateralMovement(sourceIp == $srcIp)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.6] LateralMovement: " + $srcIp + " na " + $hosts.size()
+                + " servisa (severity +45)");
+        insert(new LateralMovement($h, $srcIp, $hosts.size()));
+        modify($sev) { add(45) }
+end
+
+// R3.7 — COUNT(DISTINCT srcIP) preko 1min > 500 -> DistributedAttack; +40 (accumulate)
+rule "R3.7 DistributedAttack (accumulate over 1min)"
+    when
+        $any: LoginAttemptEvent(success == false, $h: hostId)
+        $ips: java.util.Set(size > 500) from accumulate(
+            LoginAttemptEvent(hostId == $h, success == false, $ip: sourceIp) over window:time(1m),
+            collectSet($ip)
+        )
+        not DistributedAttack(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.7] DistributedAttack on " + $h + " (" + $ips.size() + " IP / 1min, severity +40)");
+        insert(new DistributedAttack($h, (long) $ips.size()));
+        modify($sev) { add(40) }
+end
+
+// R3.8 — SensitiveDataAccess -> OutboundSpike within 15min (isti host) -> DataExfiltration; +50 (CEP)
+rule "R3.8 DataExfiltration (CEP)"
+    when
+        $sda: SensitiveDataAccess($h: hostId, $u: userId)
+        $out: OutboundSpike(hostId == $h, this after[0s, 15m] $sda)
+        not DataExfiltration(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.8] DataExfiltration (CEP) on " + $h + " user " + $u + " (severity +50)");
+        insert(new DataExfiltration($h, $u));
+        modify($sev) { add(50) }
+end
+
+// R3.9 — >= 6 outbound konekcija ka istom destIP u 35min -> C2Beaconing; +45 (CEP)
+//        (pojednostavljenje regularnog intervala ±5% iz spec-a)
+rule "R3.9 C2Beaconing (CEP)"
+    when
+        $c: NetworkConnectionEvent($h: hostId, $dst: destIp)
+        $cnt: Number(intValue >= 6) from accumulate(
+            $n: NetworkConnectionEvent(hostId == $h, destIp == $dst) over window:time(35m),
+            count($n)
+        )
+        not C2Beaconing(hostId == $h, destIp == $dst)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.9] C2Beaconing (CEP) on " + $h + " -> " + $dst
+                + " (" + $cnt + " konekcija / 35min, severity +45)");
+        insert(new C2Beaconing($h, $dst));
+        modify($sev) { add(45) }
+end
+
+// R3.10 — MassFileModification + ServiceDown + HighCPU u 5min (isti host) -> RansomwareActivity; +60 (CEP)
+rule "R3.10 RansomwareActivity (CEP)"
+    when
+        $mfm: MassFileModification($h: hostId)
+        $cpu: MetricEvent(metricType == MetricType.CPU_USAGE, value > 90,
+                          hostId == $h, this after[0s, 5m] $mfm)
+        $down: MetricEvent(metricType == MetricType.SERVICE_AVAILABILITY, value == 0,
+                           hostId == $h, this after[0s, 5m] $mfm)
+        not RansomwareActivity(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.10] RansomwareActivity (CEP) on " + $h + " (severity +60)");
+        insert(new RansomwareActivity($h));
+        modify($sev) { add(60) }
+end
+
+// =====================================================================
+// NIVO 4 — Odluka i odgovor  — Minakov: R4.6 (CRITICAL) + R4.7–R4.11
+// =====================================================================
+
+// R4.6 — severity >= 85 -> Alert CRITICAL; isolateHost(); notifyManagement(); activateIRP()
 rule "R4.6 CRITICAL Alert"
-    salience 20
+    salience -100
     when
         $sev: IncidentSeverity($h: hostId, score >= 85)
-        not Alert(hostId == $h, level == Level.CRITICAL)
+        not Alert(hostId == $h)
     then
         System.out.println("[R4.6] CRITICAL Alert on " + $h + " (severity=" + $sev.getScore() + ")");
         System.out.println("       -> isolateHost(" + $h + "); notifyManagement(); activateIRP()");
-        insert(new Alert(
-            $h,
-            Level.CRITICAL,
-            $sev.getScore(),
-            "CRITICAL incident on host " + $h + " — isolation + IRP activated"
-        ));
+        insert(new Alert($h, Level.CRITICAL, $sev.getScore(),
+                "CRITICAL incident on host " + $h + " — isolation + IRP activated"));
+        insert(new ResponseAction($h, "isolateHost", "Host " + $h + " izolovan; aktiviran IRP"));
+end
+
+// R4.7 — CompromisedAccount -> forceLogout(); lockAccount(); notifySecOps()
+rule "R4.7 CompromisedAccount response"
+    when
+        CompromisedAccount($h: hostId, $u: userId)
+        not ResponseAction(hostId == $h, action == "lockAccount")
+    then
+        System.out.println("[R4.7] CompromisedAccount response on " + $h
+                + " -> forceLogout(" + $u + "); lockAccount(); notifySecOps()");
+        insert(new ResponseAction($h, "lockAccount", "forceLogout + lock naloga " + $u + "; notifySecOps()"));
+end
+
+// R4.8 — DataExfiltration -> blockOutboundTraffic(); snapshotEvidence(); notifyDataProtection()
+rule "R4.8 DataExfiltration response"
+    when
+        DataExfiltration($h: hostId)
+        not ResponseAction(hostId == $h, action == "blockOutboundTraffic")
+    then
+        System.out.println("[R4.8] DataExfiltration response on " + $h
+                + " -> blockOutboundTraffic(); snapshotEvidence(); notifyDataProtection()");
+        insert(new ResponseAction($h, "blockOutboundTraffic",
+                "Blokiran outbound; snapshotEvidence(); notifyDataProtection()"));
+end
+
+// R4.9 — RansomwareActivity -> isolateHost(); disableSharedDrives(); activateBackupRestore(); +25
+rule "R4.9 RansomwareActivity response"
+    when
+        RansomwareActivity($h: hostId)
+        not SeverityApplied(hostId == $h, ruleId == "R4.9")
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R4.9] RansomwareActivity response on " + $h
+                + " -> isolateHost(); disableSharedDrives(); activateBackupRestore() (severity +25)");
+        insert(new SeverityApplied($h, "R4.9"));
+        insert(new ResponseAction($h, "disableSharedDrives",
+                "isolateHost(); disableSharedDrives(); activateBackupRestore()"));
+        modify($sev) { add(25) }
+end
+
+// R4.10 — InsiderThreat -> revokeAccess(user); notifyHR(); auditTrail()
+rule "R4.10 InsiderThreat response"
+    when
+        InsiderThreat($h: hostId, $u: userId)
+        not ResponseAction(hostId == $h, action == "revokeAccess")
+    then
+        System.out.println("[R4.10] InsiderThreat response on " + $h
+                + " -> revokeAccess(" + $u + "); notifyHR(); auditTrail()");
+        insert(new ResponseAction($h, "revokeAccess", "revokeAccess(" + $u + "); notifyHR(); auditTrail()"));
+end
+
+// R4.11 — C2Beaconing -> blockDestIP(); deepPacketInspection(); notifyThreatIntel()
+rule "R4.11 C2Beaconing response"
+    when
+        C2Beaconing($h: hostId, $dst: destIp)
+        not ResponseAction(hostId == $h, action == "blockDestIP")
+    then
+        System.out.println("[R4.11] C2Beaconing response on " + $h
+                + " -> blockDestIP(" + $dst + "); deepPacketInspection(); notifyThreatIntel()");
+        insert(new ResponseAction($h, "blockDestIP", "blockDestIP(" + $dst + "); DPI; notifyThreatIntel()"));
 end

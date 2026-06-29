@@ -53,6 +53,13 @@
 			<version>${drools.version}</version>
 		</dependency>
 
+		<!-- XLS decision tables (Templates tehnika) — donosi i Apache POI -->
+		<dependency>
+			<groupId>org.drools</groupId>
+			<artifactId>drools-decisiontables</artifactId>
+			<version>${drools.version}</version>
+		</dependency>
+
 		<dependency>
       <groupId>com.ftn.sbnz</groupId>
       <artifactId>model</artifactId>

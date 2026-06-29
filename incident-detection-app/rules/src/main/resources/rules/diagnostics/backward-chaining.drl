@@ -1,0 +1,217 @@
+// =====================================================================
+// Backward chaining — dijagnostičko stablo zavisnosti incidenata
+// Vlasnik: Roman Minakov (SV83/2023) — napredna tehnika BC
+// spec_latest.md §1.3.5 (stablo) i §1.3.6 (query-ji Q1–Q8)
+//
+// Model:
+//  - IncidentDependency(parentId, childId) — grane stabla (statički seed)
+//  - IncidentFactor(id, hostId, satisfied)  — listovi (po hostu)
+// Rekurzivni query isSatisfied(node, host) prolazi stablo; Q1–Q7 su wrapper-i,
+// Q8 (whyNotTriggered) vraća nezadovoljene direktne uslove datog incidenta.
+// =====================================================================
+package rules.diagnostics;
+
+import com.ftn.sbnz.model.Host;
+import com.ftn.sbnz.model.IncidentDependency;
+import com.ftn.sbnz.model.IncidentFactor;
+
+import com.ftn.sbnz.model.HighCPU;
+import com.ftn.sbnz.model.HighMemory;
+import com.ftn.sbnz.model.HighDisk;
+import com.ftn.sbnz.model.SlowDiskIO;
+import com.ftn.sbnz.model.SlowService;
+import com.ftn.sbnz.model.BruteForceAttempt;
+import com.ftn.sbnz.model.BruteForcePattern;
+import com.ftn.sbnz.model.SlowBruteForce;
+import com.ftn.sbnz.model.PotentialDDoS;
+import com.ftn.sbnz.model.DDoSPattern;
+import com.ftn.sbnz.model.DistributedAttack;
+import com.ftn.sbnz.model.CompromisedAccount;
+import com.ftn.sbnz.model.AnomalousAccess;
+import com.ftn.sbnz.model.InsiderThreat;
+import com.ftn.sbnz.model.HighRiskUser;
+import com.ftn.sbnz.model.LateralMovement;
+import com.ftn.sbnz.model.SuspiciousIP;
+import com.ftn.sbnz.model.DataExfiltration;
+import com.ftn.sbnz.model.SuspiciousDataMovement;
+import com.ftn.sbnz.model.C2Beaconing;
+import com.ftn.sbnz.model.ServiceDown;
+import com.ftn.sbnz.model.CascadeFailure;
+import com.ftn.sbnz.model.RansomwareActivity;
+import com.ftn.sbnz.model.PossibleRansomware;
+import com.ftn.sbnz.model.MassFileModification;
+import com.ftn.sbnz.model.UserActivityEvent;
+
+// =====================================================================
+// SEED 1 — statičke grane stabla zavisnosti (jednom po sesiji)
+// =====================================================================
+rule "Seed incident dependency tree"
+    salience 200
+    when
+        not IncidentDependency()
+    then
+        // koren
+        insert(new IncidentDependency("systemAtRisk", "performanceDegradation"));
+        insert(new IncidentDependency("systemAtRisk", "securityThreat"));
+        insert(new IncidentDependency("systemAtRisk", "availabilityIssue"));
+        insert(new IncidentDependency("systemAtRisk", "ransomwareRisk"));
+        // performanse
+        insert(new IncidentDependency("performanceDegradation", "resourceExhaustion"));
+        insert(new IncidentDependency("performanceDegradation", "storageProblem"));
+        insert(new IncidentDependency("performanceDegradation", "slowResponse"));
+        insert(new IncidentDependency("resourceExhaustion", "HighCPU"));
+        insert(new IncidentDependency("resourceExhaustion", "HighMemory"));
+        insert(new IncidentDependency("storageProblem", "HighDisk"));
+        insert(new IncidentDependency("storageProblem", "SlowDiskIO"));
+        insert(new IncidentDependency("slowResponse", "SlowService"));
+        // sigurnost
+        insert(new IncidentDependency("securityThreat", "activeAttack"));
+        insert(new IncidentDependency("securityThreat", "compromise"));
+        insert(new IncidentDependency("securityThreat", "lateralMovement"));
+        insert(new IncidentDependency("securityThreat", "dataBreachRisk"));
+        insert(new IncidentDependency("activeAttack", "bruteForce"));
+        insert(new IncidentDependency("activeAttack", "ddos"));
+        insert(new IncidentDependency("bruteForce", "BruteForceAttempt"));
+        insert(new IncidentDependency("bruteForce", "BruteForcePattern"));
+        insert(new IncidentDependency("bruteForce", "SlowBruteForce"));
+        insert(new IncidentDependency("ddos", "PotentialDDoS"));
+        insert(new IncidentDependency("ddos", "DDoSPattern"));
+        insert(new IncidentDependency("ddos", "DistributedAttack"));
+        insert(new IncidentDependency("compromise", "compromisedAccount"));
+        insert(new IncidentDependency("compromise", "insiderThreat"));
+        insert(new IncidentDependency("compromisedAccount", "CompromisedAccount"));
+        insert(new IncidentDependency("compromisedAccount", "AnomalousAccess"));
+        insert(new IncidentDependency("insiderThreat", "InsiderThreat"));
+        insert(new IncidentDependency("insiderThreat", "HighRiskUser"));
+        insert(new IncidentDependency("lateralMovement", "LateralMovement"));
+        insert(new IncidentDependency("lateralMovement", "SuspiciousIP"));
+        insert(new IncidentDependency("dataBreachRisk", "exfiltration"));
+        insert(new IncidentDependency("dataBreachRisk", "c2Activity"));
+        insert(new IncidentDependency("exfiltration", "DataExfiltration"));
+        insert(new IncidentDependency("exfiltration", "SuspiciousDataMovement"));
+        insert(new IncidentDependency("c2Activity", "C2Beaconing"));
+        // dostupnost
+        insert(new IncidentDependency("availabilityIssue", "serviceDown"));
+        insert(new IncidentDependency("availabilityIssue", "cascadeFailure"));
+        insert(new IncidentDependency("serviceDown", "ServiceDown"));
+        insert(new IncidentDependency("cascadeFailure", "CascadeFailure"));
+        // ransomware
+        insert(new IncidentDependency("ransomwareRisk", "RansomwareActivity"));
+        insert(new IncidentDependency("ransomwareRisk", "PossibleRansomware"));
+        insert(new IncidentDependency("ransomwareRisk", "MassFileModification"));
+        System.out.println("[BC] Stablo zavisnosti incidenata inicijalizovano");
+end
+
+// =====================================================================
+// SEED 2 — listovi (IncidentFactor) po hostu, inicijalno satisfied = false
+// =====================================================================
+rule "Seed incident factors per host"
+    salience 190
+    when
+        $h: Host($id: id)
+        not IncidentFactor(hostId == $id)
+    then
+        String[] leaves = {
+            "HighCPU", "HighMemory", "HighDisk", "SlowDiskIO", "SlowService",
+            "BruteForceAttempt", "BruteForcePattern", "SlowBruteForce",
+            "PotentialDDoS", "DDoSPattern", "DistributedAttack",
+            "CompromisedAccount", "AnomalousAccess", "InsiderThreat", "HighRiskUser",
+            "LateralMovement", "SuspiciousIP",
+            "DataExfiltration", "SuspiciousDataMovement", "C2Beaconing",
+            "ServiceDown", "CascadeFailure",
+            "RansomwareActivity", "PossibleRansomware", "MassFileModification"
+        };
+        for (String leaf : leaves) {
+            insert(new IncidentFactor(leaf, $id, false, 0.0));
+        }
+        System.out.println("[BC] Inicijalizovani IncidentFactor listovi za host " + $id);
+end
+
+// =====================================================================
+// MARK — kada je incident detektovan, odgovarajući list postaje satisfied=true
+// =====================================================================
+rule "BC factor HighCPU"          when HighCPU($h: hostId)                $f: IncidentFactor(id == "HighCPU", hostId == $h, satisfied == false)              then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor HighMemory"       when HighMemory($h: hostId)             $f: IncidentFactor(id == "HighMemory", hostId == $h, satisfied == false)           then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor HighDisk"         when HighDisk($h: hostId)               $f: IncidentFactor(id == "HighDisk", hostId == $h, satisfied == false)             then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor SlowDiskIO"       when SlowDiskIO($h: hostId)             $f: IncidentFactor(id == "SlowDiskIO", hostId == $h, satisfied == false)           then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor SlowService"      when SlowService($h: hostId)            $f: IncidentFactor(id == "SlowService", hostId == $h, satisfied == false)          then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor BruteForceAttempt" when BruteForceAttempt($h: hostId)     $f: IncidentFactor(id == "BruteForceAttempt", hostId == $h, satisfied == false)    then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor BruteForcePattern" when BruteForcePattern($h: hostId)     $f: IncidentFactor(id == "BruteForcePattern", hostId == $h, satisfied == false)    then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor SlowBruteForce"   when SlowBruteForce($h: hostId)         $f: IncidentFactor(id == "SlowBruteForce", hostId == $h, satisfied == false)       then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor PotentialDDoS"    when PotentialDDoS($h: hostId)          $f: IncidentFactor(id == "PotentialDDoS", hostId == $h, satisfied == false)        then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor DDoSPattern"      when DDoSPattern($h: hostId)            $f: IncidentFactor(id == "DDoSPattern", hostId == $h, satisfied == false)          then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor DistributedAttack" when DistributedAttack($h: hostId)     $f: IncidentFactor(id == "DistributedAttack", hostId == $h, satisfied == false)    then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor CompromisedAccount" when CompromisedAccount($h: hostId)   $f: IncidentFactor(id == "CompromisedAccount", hostId == $h, satisfied == false)   then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor AnomalousAccess"  when AnomalousAccess($h: hostId)        $f: IncidentFactor(id == "AnomalousAccess", hostId == $h, satisfied == false)      then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor InsiderThreat"    when InsiderThreat($h: hostId)          $f: IncidentFactor(id == "InsiderThreat", hostId == $h, satisfied == false)        then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor LateralMovement"  when LateralMovement($h: hostId)        $f: IncidentFactor(id == "LateralMovement", hostId == $h, satisfied == false)      then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor SuspiciousIP"     when SuspiciousIP($h: hostId)           $f: IncidentFactor(id == "SuspiciousIP", hostId == $h, satisfied == false)         then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor DataExfiltration" when DataExfiltration($h: hostId)       $f: IncidentFactor(id == "DataExfiltration", hostId == $h, satisfied == false)     then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor SuspiciousDataMovement" when SuspiciousDataMovement($h: hostId) $f: IncidentFactor(id == "SuspiciousDataMovement", hostId == $h, satisfied == false) then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor C2Beaconing"      when C2Beaconing($h: hostId)            $f: IncidentFactor(id == "C2Beaconing", hostId == $h, satisfied == false)          then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor ServiceDown"      when ServiceDown($h: hostId)            $f: IncidentFactor(id == "ServiceDown", hostId == $h, satisfied == false)          then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor CascadeFailure"   when CascadeFailure($h: hostId)         $f: IncidentFactor(id == "CascadeFailure", hostId == $h, satisfied == false)       then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor RansomwareActivity" when RansomwareActivity($h: hostId)   $f: IncidentFactor(id == "RansomwareActivity", hostId == $h, satisfied == false)   then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor PossibleRansomware" when PossibleRansomware($h: hostId)   $f: IncidentFactor(id == "PossibleRansomware", hostId == $h, satisfied == false)   then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+rule "BC factor MassFileModification" when MassFileModification($h: hostId) $f: IncidentFactor(id == "MassFileModification", hostId == $h, satisfied == false) then modify($f){ setSatisfied(true), setConfidence(1.0) } end
+
+// HighRiskUser nema hostId — vezujemo ga za host preko korisničke aktivnosti
+rule "BC factor HighRiskUser"
+    when
+        HighRiskUser($u: userId)
+        UserActivityEvent(userId == $u, $h: hostId)
+        $f: IncidentFactor(id == "HighRiskUser", hostId == $h, satisfied == false)
+    then
+        modify($f){ setSatisfied(true), setConfidence(1.0) }
+end
+
+// =====================================================================
+// QUERY — rekurzivni obilazak stabla (backward chaining)
+// =====================================================================
+query isSatisfied(String node, String host)
+    IncidentFactor(id == node, hostId == host, satisfied == true)
+    or
+    ( IncidentDependency(parentId == node, $child : childId)
+      and isSatisfied($child, host;) )
+end
+
+// Q1 — koren
+query isSystemAtRisk(String host)
+    isSatisfied("systemAtRisk", host;)
+end
+
+// Q2
+query hasPerformanceDegradation(String host)
+    isSatisfied("performanceDegradation", host;)
+end
+
+// Q3
+query hasSecurityThreat(String host)
+    isSatisfied("securityThreat", host;)
+end
+
+// Q4
+query hasAvailabilityIssue(String host)
+    isSatisfied("availabilityIssue", host;)
+end
+
+// Q5
+query hasDataBreachRisk(String host)
+    isSatisfied("dataBreachRisk", host;)
+end
+
+// Q6
+query hasInsiderThreat(String host)
+    isSatisfied("insiderThreat", host;)
+end
+
+// Q7
+query hasRansomwareRisk(String host)
+    isSatisfied("ransomwareRisk", host;)
+end
+
+// Q8 — Why-not: nezadovoljeni direktni uslovi datog incidenta na hostu
+query whyNotTriggered(String incidentType, String host)
+    IncidentDependency(parentId == incidentType, $child : childId)
+    $factor : IncidentFactor(id == $child, hostId == host, satisfied == false)
+end
