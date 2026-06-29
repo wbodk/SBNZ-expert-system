@@ -1,25 +1,63 @@
 // =====================================================================
 // Pravila: Infrastructure & UBA  —  Avanesov Roman (SV88/2024)
-// Napredne tehnike: Templates + CEP (Templates u sledećoj iteraciji)
-// Domen: performans/resource exhaustion + per-host load monitoring
+// Napredne tehnike: Templates (XLS, Faza 3) + CEP (InsiderThreat)
+// Nivoi: 1 (klasifikacija) → 2 (korelacija) → 3 (vremenski/UBA) → 4 (odluka)
 // =====================================================================
 package rules.infrastructure;
 
 import com.ftn.sbnz.model.Host;
 import com.ftn.sbnz.model.MetricEvent;
 import com.ftn.sbnz.model.MetricEvent.MetricType;
+import com.ftn.sbnz.model.HostBaseline;
+import com.ftn.sbnz.model.FileEvent;
+import com.ftn.sbnz.model.ResourceAccessEvent;
+import com.ftn.sbnz.model.SensitiveResource;
+import com.ftn.sbnz.model.UserActivityEvent;
+import com.ftn.sbnz.model.UserActivityProfile;
+import com.ftn.sbnz.model.UserRiskScore;
+import com.ftn.sbnz.model.PeerGroupStats;
+import com.ftn.sbnz.model.LoginAttemptEvent;
+import com.ftn.sbnz.model.ScheduledMaintenance;
+
 import com.ftn.sbnz.model.HighCPU;
 import com.ftn.sbnz.model.HighMemory;
+import com.ftn.sbnz.model.HighDisk;
+import com.ftn.sbnz.model.SlowService;
+import com.ftn.sbnz.model.ServiceDown;
+import com.ftn.sbnz.model.SlowDiskIO;
+import com.ftn.sbnz.model.OutboundSpike;
+import com.ftn.sbnz.model.MassFileModification;
+import com.ftn.sbnz.model.SensitiveDataAccess;
+import com.ftn.sbnz.model.UnusualLoginFrequency;
+import com.ftn.sbnz.model.UnusualDataVolume;
+
 import com.ftn.sbnz.model.ResourceExhaustion;
+import com.ftn.sbnz.model.StorageIncident;
+import com.ftn.sbnz.model.SuspiciousDataMovement;
+import com.ftn.sbnz.model.SuspiciousUserActivity;
+import com.ftn.sbnz.model.PossibleRansomware;
+import com.ftn.sbnz.model.SuspiciousAfterHoursAccess;
+
 import com.ftn.sbnz.model.SustainedHighLoad;
+import com.ftn.sbnz.model.CascadeFailure;
+import com.ftn.sbnz.model.SlowBruteForce;
+import com.ftn.sbnz.model.HighRiskUser;
+import com.ftn.sbnz.model.InsiderThreat;
+
+import com.ftn.sbnz.model.DDoSPattern;
+import com.ftn.sbnz.model.CompromisedAccount;
+import com.ftn.sbnz.model.LateralMovement;
+
 import com.ftn.sbnz.model.IncidentSeverity;
+import com.ftn.sbnz.model.SeverityApplied;
 import com.ftn.sbnz.model.Alert;
 import com.ftn.sbnz.model.Alert.Level;
 
-// =========================================================
-// R1.1 — Nivo 1: Klasifikacija (HighCPU)
-// cpuUsage > 90% -> insert(HighCPU)
-// =========================================================
+// =====================================================================
+// NIVO 1 — Klasifikacija događaja
+// =====================================================================
+
+// R1.1 — cpuUsage > 90% -> HighCPU
 rule "R1.1 HighCPU"
     when
         $m: MetricEvent(metricType == MetricType.CPU_USAGE, value > 90, $h: hostId)
@@ -29,10 +67,7 @@ rule "R1.1 HighCPU"
         insert(new HighCPU($h, $m.getValue()));
 end
 
-// =========================================================
-// R1.2 — Nivo 1: Klasifikacija (HighMemory)
-// memUsage > 95% -> insert(HighMemory)
-// =========================================================
+// R1.2 — memUsage > 95% -> HighMemory
 rule "R1.2 HighMemory"
     when
         $m: MetricEvent(metricType == MetricType.MEMORY_USAGE, value > 95, $h: hostId)
@@ -42,10 +77,122 @@ rule "R1.2 HighMemory"
         insert(new HighMemory($h, $m.getValue()));
 end
 
-// =========================================================
-// R2.1 — Nivo 2: Korelacija (ResourceExhaustion)
-// HighCPU AND HighMemory -> insert(ResourceExhaustion); severity += 20
-// =========================================================
+// R1.3 — diskUsage > 90% -> HighDisk
+rule "R1.3 HighDisk"
+    when
+        $m: MetricEvent(metricType == MetricType.DISK_USAGE, value > 90, $h: hostId)
+        not HighDisk(hostId == $h)
+    then
+        System.out.println("[R1.3] HighDisk on " + $h + " (disk=" + $m.getValue() + "%)");
+        insert(new HighDisk($h, $m.getValue()));
+end
+
+// R1.4 — serviceResponseTime > 3000ms -> SlowService
+rule "R1.4 SlowService"
+    when
+        $m: MetricEvent(metricType == MetricType.SERVICE_RESPONSE_TIME_MS, value > 3000, $h: hostId)
+        not SlowService(hostId == $h)
+    then
+        System.out.println("[R1.4] SlowService on " + $h + " (rt=" + $m.getValue() + "ms)");
+        insert(new SlowService($h, $m.getValue()));
+end
+
+// R1.5 — serviceAvailability == DOWN (0) -> ServiceDown
+rule "R1.5 ServiceDown"
+    when
+        $m: MetricEvent(metricType == MetricType.SERVICE_AVAILABILITY, value == 0, $h: hostId)
+        not ServiceDown(hostId == $h)
+    then
+        System.out.println("[R1.5] ServiceDown on " + $h);
+        insert(new ServiceDown($h));
+end
+
+// R1.14 — diskIOLatency > 500ms -> SlowDiskIO
+rule "R1.14 SlowDiskIO"
+    when
+        $m: MetricEvent(metricType == MetricType.DISK_IO_LATENCY_MS, value > 500, $h: hostId)
+        not SlowDiskIO(hostId == $h)
+    then
+        System.out.println("[R1.14] SlowDiskIO on " + $h + " (latency=" + $m.getValue() + "ms)");
+        insert(new SlowDiskIO($h, $m.getValue()));
+end
+
+// R1.9 — outbound > 5× baseline (kada postoji HostBaseline)
+rule "R1.9 OutboundSpike (baseline)"
+    when
+        $m: MetricEvent(metricType == MetricType.OUTBOUND_TRAFFIC_MBPS, $h: hostId, $v: value)
+        $b: HostBaseline(hostId == $h)
+        eval($v > $b.getOutboundBaselineMb() * 5)
+        not OutboundSpike(hostId == $h)
+    then
+        System.out.println("[R1.9] OutboundSpike on " + $h + " (" + $v + "MB > 5× baseline "
+                + $b.getOutboundBaselineMb() + "MB)");
+        insert(new OutboundSpike($h, $v, $b.getOutboundBaselineMb(), $m.getTimestamp()));
+end
+
+// R1.9' — fallback prag kad baseline nije definisan
+rule "R1.9 OutboundSpike (default)"
+    when
+        $m: MetricEvent(metricType == MetricType.OUTBOUND_TRAFFIC_MBPS, value > 200, $h: hostId, $v: value)
+        not HostBaseline(hostId == $h)
+        not OutboundSpike(hostId == $h)
+    then
+        System.out.println("[R1.9] OutboundSpike on " + $h + " (" + $v + "MB > default 200MB)");
+        insert(new OutboundSpike($h, $v, 40.0, $m.getTimestamp()));
+end
+
+// R1.10 — fileModificationRate > 100 files/min -> MassFileModification
+rule "R1.10 MassFileModification"
+    when
+        $f: FileEvent(fileCount > 100, $h: hostId)
+        not MassFileModification(hostId == $h)
+    then
+        System.out.println("[R1.10] MassFileModification on " + $h + " (" + $f.getFileCount() + " files)");
+        insert(new MassFileModification($h, $f.getFileCount(), $f.getTimestamp()));
+end
+
+// R1.11 — pristup resursu iz sensitive registra -> SensitiveDataAccess
+rule "R1.11 SensitiveDataAccess"
+    when
+        $a: ResourceAccessEvent($h: hostId, $u: userId, $r: resourceId, $hour: accessHour)
+        SensitiveResource(resourceId == $r)
+        not SensitiveDataAccess(hostId == $h, userId == $u, resourceId == $r)
+    then
+        System.out.println("[R1.11] SensitiveDataAccess: " + $u + " -> " + $r + " on " + $h);
+        insert(new SensitiveDataAccess($h, $u, $r, $hour, $a.getTimestamp()));
+end
+
+// R1.12 — userLoginCount > baseline.avgLogins × 3 -> UnusualLoginFrequency
+rule "R1.12 UnusualLoginFrequency"
+    when
+        $e: UserActivityEvent($u: userId, $h: hostId, $c: dailyLoginCount)
+        $p: UserActivityProfile(userId == $u)
+        eval($c > $p.getAvgDailyLogins() * 3)
+        not UnusualLoginFrequency(userId == $u, hostId == $h)
+    then
+        System.out.println("[R1.12] UnusualLoginFrequency: " + $u + " (" + $c
+                + " > 3× avg " + $p.getAvgDailyLogins() + ")");
+        insert(new UnusualLoginFrequency($u, $h, $c, $e.getTimestamp()));
+end
+
+// R1.13 — userDataDownloadVolume > baseline.avgVolume × 5 -> UnusualDataVolume
+rule "R1.13 UnusualDataVolume"
+    when
+        $e: UserActivityEvent($u: userId, $h: hostId, $vol: dataDownloadVolumeMb)
+        $p: UserActivityProfile(userId == $u)
+        eval($vol > $p.getAvgDataVolumeMb() * 5)
+        not UnusualDataVolume(userId == $u, hostId == $h)
+    then
+        System.out.println("[R1.13] UnusualDataVolume: " + $u + " (" + $vol
+                + "MB > 5× avg " + $p.getAvgDataVolumeMb() + "MB)");
+        insert(new UnusualDataVolume($u, $h, $vol));
+end
+
+// =====================================================================
+// NIVO 2 — Korelacija događaja
+// =====================================================================
+
+// R2.1 — HighCPU AND HighMemory -> ResourceExhaustion; +20
 rule "R2.1 ResourceExhaustion"
     when
         HighCPU($h: hostId)
@@ -58,47 +205,235 @@ rule "R2.1 ResourceExhaustion"
         modify($sev) { add(20) }
 end
 
-// =========================================================
-// R3.2 — Nivo 3: Vremenski obrazac — accumulate
-// AVG(cpuUsage) preko sliding window-a od 30 minuta > 85%
-// -> insert(SustainedHighLoad); severity += 20
-// =========================================================
+// R2.2 — ServiceDown AND HighDisk -> StorageIncident; +25
+rule "R2.2 StorageIncident"
+    when
+        ServiceDown($h: hostId)
+        HighDisk(hostId == $h)
+        not StorageIncident(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.2] StorageIncident on " + $h + " (severity +25)");
+        insert(new StorageIncident($h));
+        modify($sev) { add(25) }
+end
+
+// R2.5 — ServiceDown AND NOT ScheduledMaintenance -> +35 (neplaniran ispad)
+rule "R2.5 Unplanned outage severity"
+    when
+        ServiceDown($h: hostId)
+        not ScheduledMaintenance(hostId == $h)
+        not SeverityApplied(hostId == $h, ruleId == "R2.5")
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.5] Neplaniran ispad servisa na " + $h + " (severity +35)");
+        insert(new SeverityApplied($h, "R2.5"));
+        modify($sev) { add(35) }
+end
+
+// R2.7 — SensitiveDataAccess AND OutboundSpike -> SuspiciousDataMovement; +35
+rule "R2.7 SuspiciousDataMovement"
+    when
+        SensitiveDataAccess($h: hostId)
+        OutboundSpike(hostId == $h)
+        not SuspiciousDataMovement(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.7] SuspiciousDataMovement on " + $h + " (severity +35)");
+        insert(new SuspiciousDataMovement($h));
+        modify($sev) { add(35) }
+end
+
+// R2.8 — UnusualLoginFrequency AND UnusualDataVolume -> SuspiciousUserActivity; +25
+rule "R2.8 SuspiciousUserActivity"
+    when
+        UnusualLoginFrequency($u: userId, $h: hostId)
+        UnusualDataVolume(userId == $u)
+        not SuspiciousUserActivity(userId == $u)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.8] SuspiciousUserActivity: " + $u + " (severity +25)");
+        insert(new SuspiciousUserActivity($u, $h));
+        modify($sev) { add(25) }
+end
+
+// R2.9 — MassFileModification AND ServiceDown -> PossibleRansomware; +40
+rule "R2.9 PossibleRansomware"
+    when
+        MassFileModification($h: hostId)
+        ServiceDown(hostId == $h)
+        not PossibleRansomware(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.9] PossibleRansomware on " + $h + " (severity +40)");
+        insert(new PossibleRansomware($h));
+        modify($sev) { add(40) }
+end
+
+// R2.10 — SensitiveDataAccess van dozvoljenih sati -> SuspiciousAfterHoursAccess; +30
+rule "R2.10 SuspiciousAfterHoursAccess"
+    when
+        $s: SensitiveDataAccess($h: hostId, $u: userId, $hour: accessHour)
+        $p: UserActivityProfile(userId == $u)
+        eval($hour < $p.getAllowedHourStart() || $hour > $p.getAllowedHourEnd())
+        not SuspiciousAfterHoursAccess(hostId == $h, userId == $u)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R2.10] SuspiciousAfterHoursAccess: " + $u + " @ " + $hour + "h on " + $h
+                + " (dozvoljeno " + $p.getAllowedHourStart() + "-" + $p.getAllowedHourEnd() + ", severity +30)");
+        insert(new SuspiciousAfterHoursAccess($h, $u));
+        modify($sev) { add(30) }
+end
+
+// =====================================================================
+// NIVO 3 — Vremenski obrasci (accumulate) + UBA (CEP)
+// =====================================================================
+
+// R3.2 — AVG(cpuUsage) preko 30min > 85% -> SustainedHighLoad; +20
 rule "R3.2 SustainedHighLoad (accumulate over 30min)"
     when
         $host: Host($h: id)
         $avg: Number(doubleValue > 85) from accumulate(
-            MetricEvent(
-                metricType == MetricType.CPU_USAGE,
-                hostId == $h,
-                $v: value
-            ) over window:time(30m),
+            MetricEvent(metricType == MetricType.CPU_USAGE, hostId == $h, $v: value) over window:time(30m),
             average($v)
         )
         not SustainedHighLoad(hostId == $h)
         $sev: IncidentSeverity(hostId == $h)
     then
         System.out.println("[R3.2] SustainedHighLoad on " + $h
-                + " (avgCPU=" + String.format("%.1f", $avg.doubleValue()) + "% u zadnjih 30min, severity +20)");
+                + " (avgCPU=" + String.format("%.1f", $avg.doubleValue()) + "% / 30min, severity +20)");
         insert(new SustainedHighLoad($h, $avg.doubleValue()));
         modify($sev) { add(20) }
 end
 
-// =========================================================
-// R4.4 — Nivo 4: Odluka — MEDIUM Alert
-// severity u [30, 60) -> insert Alert(MEDIUM)
-// =========================================================
+// R3.3 — COUNT(ServiceDown) preko 5min > 3 -> CascadeFailure; +40
+rule "R3.3 CascadeFailure (accumulate over 5min)"
+    when
+        $down: MetricEvent(metricType == MetricType.SERVICE_AVAILABILITY, value == 0, $h: hostId)
+        $cnt: Number(intValue > 3) from accumulate(
+            $d: MetricEvent(metricType == MetricType.SERVICE_AVAILABILITY, value == 0) over window:time(5m),
+            count($d)
+        )
+        not CascadeFailure(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.3] CascadeFailure (" + $cnt + " ispada / 5min), rep. host " + $h + " (severity +40)");
+        insert(new CascadeFailure($h, $cnt.longValue()));
+        modify($sev) { add(40) }
+end
+
+// R3.11 — failedLogins > 20 AND DISTINCT srcIP > 15 u 24h -> SlowBruteForce; +35
+rule "R3.11 SlowBruteForce (accumulate over 24h)"
+    when
+        $any: LoginAttemptEvent(success == false, $h: hostId)
+        $count: Number(intValue > 20) from accumulate(
+            $l: LoginAttemptEvent(hostId == $h, success == false) over window:time(24h),
+            count($l)
+        )
+        $ips: java.util.Set(size > 15) from accumulate(
+            LoginAttemptEvent(hostId == $h, success == false, $ip: sourceIp) over window:time(24h),
+            collectSet($ip)
+        )
+        not SlowBruteForce(hostId == $h)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.11] SlowBruteForce on " + $h + " (" + $count + " neuspeha, "
+                + $ips.size() + " IP / 24h, severity +35)");
+        insert(new SlowBruteForce($h, $count.longValue(), (long) $ips.size()));
+        modify($sev) { add(35) }
+end
+
+// R3.12 — UserRiskScore > peerGroup.avgRisk × 2 -> HighRiskUser; +30
+rule "R3.12 HighRiskUser (peer-group comparison)"
+    when
+        $urs: UserRiskScore($u: userId, $val: value)
+        $p: UserActivityProfile(userId == $u, $pg: peerGroup)
+        $peer: PeerGroupStats(groupId == $pg, $avg: avgRisk)
+        eval($val > $avg * 2)
+        $ua: UserActivityEvent(userId == $u, $h: hostId)
+        not HighRiskUser(userId == $u)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.12] HighRiskUser: " + $u + " (risk=" + $val
+                + " > 2× peer avg " + $avg + ", severity +30)");
+        insert(new HighRiskUser($u, $val));
+        modify($sev) { add(30) }
+end
+
+// R3.13 — UnusualLoginFrequency -> SensitiveDataAccess within 1h (isti user) -> InsiderThreat; +40 (CEP)
+rule "R3.13 InsiderThreat (CEP)"
+    when
+        $ulf: UnusualLoginFrequency($u: userId)
+        $sda: SensitiveDataAccess(userId == $u, $h: hostId, this after[0s, 1h] $ulf)
+        not InsiderThreat(userId == $u)
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R3.13] InsiderThreat (CEP): " + $u + " na " + $h + " (severity +40)");
+        insert(new InsiderThreat($u, $h));
+        modify($sev) { add(40) }
+end
+
+// =====================================================================
+// NIVO 4 — Odluka i odgovor (thresholds + bonusi)  — Avanesov: R4.1–R4.5
+// =====================================================================
+
+// R4.1 — bonus: DDoSPattern AND CascadeFailure -> +20
+rule "R4.1 DDoS+Cascade bonus"
+    when
+        DDoSPattern($h: hostId)
+        CascadeFailure(hostId == $h)
+        not SeverityApplied(hostId == $h, ruleId == "R4.1")
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R4.1] DDoSPattern + CascadeFailure na " + $h + " (bonus +20)");
+        insert(new SeverityApplied($h, "R4.1"));
+        modify($sev) { add(20) }
+end
+
+// R4.2 — bonus: CompromisedAccount AND LateralMovement -> +30
+rule "R4.2 Compromise+Lateral bonus"
+    when
+        CompromisedAccount($h: hostId)
+        LateralMovement(hostId == $h)
+        not SeverityApplied(hostId == $h, ruleId == "R4.2")
+        $sev: IncidentSeverity(hostId == $h)
+    then
+        System.out.println("[R4.2] CompromisedAccount + LateralMovement na " + $h + " (bonus +30)");
+        insert(new SeverityApplied($h, "R4.2"));
+        modify($sev) { add(30) }
+end
+
+// R4.3 — severity ∈ (0, 30) -> Alert LOW
+rule "R4.3 LOW Alert"
+    salience -100
+    when
+        $sev: IncidentSeverity($h: hostId, score > 0, score < 30)
+        not Alert(hostId == $h)
+    then
+        System.out.println("[R4.3] LOW Alert on " + $h + " (severity=" + $sev.getScore() + ") -> logIncident()");
+        insert(new Alert($h, Level.LOW, $sev.getScore(), "LOW incident on host " + $h + " — logged"));
+end
+
+// R4.4 — severity ∈ [30, 60) -> Alert MEDIUM
 rule "R4.4 MEDIUM Alert"
-    salience 10
+    salience -100
     when
         $sev: IncidentSeverity($h: hostId, score >= 30, score < 60)
         not Alert(hostId == $h)
     then
-        System.out.println("[R4.4] MEDIUM Alert on " + $h + " (severity=" + $sev.getScore() + ")");
-        System.out.println("       -> notifyOncall()");
-        insert(new Alert(
-            $h,
-            Level.MEDIUM,
-            $sev.getScore(),
-            "MEDIUM incident on host " + $h + " — oncall notified"
-        ));
+        System.out.println("[R4.4] MEDIUM Alert on " + $h + " (severity=" + $sev.getScore() + ") -> notifyOncall()");
+        insert(new Alert($h, Level.MEDIUM, $sev.getScore(), "MEDIUM incident on host " + $h + " — oncall notified"));
+end
+
+// R4.5 — severity ∈ [60, 85) -> Alert HIGH + blockSuspiciousIP()
+rule "R4.5 HIGH Alert"
+    salience -100
+    when
+        $sev: IncidentSeverity($h: hostId, score >= 60, score < 85)
+        not Alert(hostId == $h)
+    then
+        System.out.println("[R4.5] HIGH Alert on " + $h + " (severity=" + $sev.getScore()
+                + ") -> notifyTeam(); blockSuspiciousIP()");
+        insert(new Alert($h, Level.HIGH, $sev.getScore(),
+                "HIGH incident on host " + $h + " — team notified, suspicious IP blocked"));
 end

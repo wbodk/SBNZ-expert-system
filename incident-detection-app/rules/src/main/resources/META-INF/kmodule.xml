@@ -2,7 +2,7 @@
     <!-- Jedna kbase obuhvata pravila oba člana tima (security + infrastructure).
          Stream mode i pseudo-clock — potrebno za CEP/accumulate sa vremenskim prozorima. -->
     <kbase name="incidentKbase" eventProcessingMode="stream"
-           packages="rules.security,rules.infrastructure">
+           packages="rules.security,rules.infrastructure,rules.diagnostics,rules.templates">
         <ksession name="incidentKsession" clockType="pseudo"/>
     </kbase>
 </kmodule>
