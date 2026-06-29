@@ -128,14 +128,16 @@
           <select [(ngModel)]="manualHost.tier">
             <option *ngFor="let t of tiers" [value]="t">{{ t }}</option>
           </select>
-          <input
-            [(ngModel)]="manualHost.serviceClass"
-            placeholder="serviceClass (web/db/...)"
-          />
-          <input
-            [(ngModel)]="manualHost.complianceTag"
-            placeholder="compliance (PCI...)"
-          />
+          <select [(ngModel)]="manualHost.serviceClass">
+            <option *ngFor="let sc of serviceClasses" [value]="sc">
+              {{ sc }}
+            </option>
+          </select>
+          <select [(ngModel)]="manualHost.complianceTag">
+            <option *ngFor="let c of complianceTags" [value]="c.value">
+              {{ c.label }}
+            </option>
+          </select>
           <button class="btn" (click)="addHost()" [disabled]="loading">
             + Host
           </button>

@@ -6,12 +6,14 @@ import java.util.Date;
 import java.util.List;
 
 import com.ftn.sbnz.model.BlacklistedIp;
+import com.ftn.sbnz.model.FileEvent;
 import com.ftn.sbnz.model.Host;
 import com.ftn.sbnz.model.Host.Tier;
 import com.ftn.sbnz.model.HostBaseline;
 import com.ftn.sbnz.model.LoginAttemptEvent;
 import com.ftn.sbnz.model.MetricEvent;
 import com.ftn.sbnz.model.MetricEvent.MetricType;
+import com.ftn.sbnz.model.NetworkConnectionEvent;
 import com.ftn.sbnz.model.PeerGroupStats;
 import com.ftn.sbnz.model.ResourceAccessEvent;
 import com.ftn.sbnz.model.SensitiveResource;
@@ -37,18 +39,26 @@ public final class TestDataFactory {
                 + "uz DDoS obrazac (TrafficSpike + ServiceDown + HighCPU). Očekivano: CRITICAL."),
             new ScenarioInfo("B", "Insider Threat + Data Exfiltration",
                 "fs-01 (TIER_1, PCI): neuobičajena aktivnost korisnika jdoe, pristup PCI podacima "
-                + "van radnog vremena i outbound spike. Očekivano: CRITICAL + exfiltration/insider.")
+                + "van radnog vremena i outbound spike. Očekivano: CRITICAL + exfiltration/insider."),
+            new ScenarioInfo("C", "Ransomware Activity",
+                "fs-02 (TIER_1, HIPAA): masovna modifikacija fajlova (.encrypted) + ServiceDown + "
+                + "HighCPU/HighMemory/HighDisk. Očekivano: CRITICAL + RansomwareActivity, StorageIncident, "
+                + "ResourceExhaustion; HIPAA notifikacija."),
+            new ScenarioInfo("D", "Lateral Movement + C2 Beaconing",
+                "ista blacklisted IP na 3 hosta (app-01/02/03, TIER_2) + 6 regularnih outbound "
+                + "konekcija ka istom destIP sa c2-01 (TIER_3). Očekivano: LateralMovement + C2Beaconing, "
+                + "MEDIUM alerti, Tier 2/3 multiplikatori.")
         );
     }
 
     public static ScenarioData byId(String id, long t0) {
-        if ("A".equalsIgnoreCase(id)) {
-            return scenarioA(t0);
+        switch (id.toUpperCase()) {
+            case "A": return scenarioA(t0);
+            case "B": return scenarioB(t0);
+            case "C": return scenarioC(t0);
+            case "D": return scenarioD(t0);
+            default: throw new IllegalArgumentException("Nepoznat scenario: " + id);
         }
-        if ("B".equalsIgnoreCase(id)) {
-            return scenarioB(t0);
-        }
-        throw new IllegalArgumentException("Nepoznat scenario: " + id);
     }
 
     // =================================================================
@@ -109,6 +119,59 @@ public final class TestDataFactory {
         d.events.add(new MetricEvent("fs-01", MetricType.OUTBOUND_TRAFFIC_MBPS, 320.0, ts(t0, 1200)));
 
         d.spanSeconds = 1200;
+        return d;
+    }
+
+    // =================================================================
+    // Scenarij C — Ransomware Activity (kill chain: enkripcija + ispad)
+    // =================================================================
+    public static ScenarioData scenarioC(long t0) {
+        ScenarioData d = new ScenarioData("C", "Ransomware Activity");
+        d.focusHosts.add("fs-02");
+
+        // TIER_1 + HIPAA -> Tier multiplier + CompliancePolicy (HIPAA)
+        d.setup.add(new Host("fs-02", "fs-02.example.com", Tier.TIER_1, "db", "HIPAA"));
+
+        // masovna modifikacija fajlova -> R1.10 MassFileModification
+        d.events.add(new FileEvent("fs-02", 500, ".encrypted", ts(t0, 0)));
+        // CPU -> R1.1 HighCPU, R3.2 SustainedHighLoad, PerfThresholdBreach(db, prag 80)
+        d.events.add(new MetricEvent("fs-02", MetricType.CPU_USAGE, 95.0, ts(t0, 30)));
+        // RAM/Disk/IO -> R1.2/R2.1 ResourceExhaustion, R1.3/R2.2 StorageIncident, R1.14 SlowDiskIO
+        d.events.add(new MetricEvent("fs-02", MetricType.MEMORY_USAGE, 97.0, ts(t0, 40)));
+        d.events.add(new MetricEvent("fs-02", MetricType.DISK_USAGE, 95.0, ts(t0, 50)));
+        d.events.add(new MetricEvent("fs-02", MetricType.DISK_IO_LATENCY_MS, 600.0, ts(t0, 55)));
+        // ServiceDown -> R2.9 PossibleRansomware + (sa MFM+CPU u 5min) R3.10 RansomwareActivity
+        d.events.add(new MetricEvent("fs-02", MetricType.SERVICE_AVAILABILITY, 0.0, ts(t0, 120)));
+
+        d.spanSeconds = 120;
+        return d;
+    }
+
+    // =================================================================
+    // Scenarij D — Lateral Movement + C2 Beaconing
+    // =================================================================
+    public static ScenarioData scenarioD(long t0) {
+        ScenarioData d = new ScenarioData("D", "Lateral Movement + C2 Beaconing");
+        d.focusHosts.add("app-01");
+        d.focusHosts.add("c2-01");
+
+        d.setup.add(new Host("app-01", "app-01.example.com", Tier.TIER_2, "web", null));
+        d.setup.add(new Host("app-02", "app-02.example.com", Tier.TIER_2, "web", null));
+        d.setup.add(new Host("app-03", "app-03.example.com", Tier.TIER_2, "web", null));
+        d.setup.add(new Host("c2-01", "c2-01.example.com", Tier.TIER_3, "batch", null));
+        d.setup.add(new BlacklistedIp("10.66.66.66"));
+
+        // ista blacklisted IP na 3 servisa -> R1.7 SuspiciousIP ×3 -> R3.6 LateralMovement
+        d.events.add(new LoginAttemptEvent("app-01", "svc", "10.66.66.66", false, ts(t0, 0)));
+        d.events.add(new LoginAttemptEvent("app-02", "svc", "10.66.66.66", false, ts(t0, 30)));
+        d.events.add(new LoginAttemptEvent("app-03", "svc", "10.66.66.66", false, ts(t0, 60)));
+
+        // 6 regularnih outbound konekcija ka istom destIP (~25 min) -> R3.9 C2Beaconing
+        for (int i = 0; i < 6; i++) {
+            d.events.add(new NetworkConnectionEvent("c2-01", "203.0.113.5", 0.5, ts(t0, 90 + i * 300L)));
+        }
+
+        d.spanSeconds = 90 + 5 * 300; // poslednja konekcija
         return d;
     }
 

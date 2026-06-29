@@ -93,4 +93,43 @@ public class ScenarioServiceTest {
                 .anyMatch(f -> "MassFileModification".equals(f.getId()));
         assertTrue("why-not ransomware -> MassFileModification nedostaje", massFileMissing);
     }
+
+    @Test
+    public void testScenarioC_ransomware_critical() {
+        System.out.println("\n=== Scenario C (Ransomware) ===");
+        scenarios.run("C");
+
+        assertTrue("fs-02 treba da bude CRITICAL", hasAlert("fs-02", Level.CRITICAL));
+
+        Map<String, Boolean> diag = engine.diagnose("fs-02");
+        assertTrue("isSystemAtRisk(fs-02)", diag.get("isSystemAtRisk"));
+        assertTrue("hasRansomwareRisk(fs-02) (Q7)", diag.get("hasRansomwareRisk"));
+        assertTrue("hasPerformanceDegradation(fs-02)", diag.get("hasPerformanceDegradation"));
+
+        // R4.9 RansomwareActivity -> disableSharedDrives; R4.14 HIPAA -> notifyCompliance_HIPAA
+        assertTrue("R4.9 disableSharedDrives", hasResponse("fs-02", "disableSharedDrives"));
+        assertTrue("R4.14 notifyCompliance_HIPAA", hasResponse("fs-02", "notifyCompliance_HIPAA"));
+    }
+
+    @Test
+    public void testScenarioD_lateralAndC2_medium() {
+        System.out.println("\n=== Scenario D (Lateral Movement + C2) ===");
+        scenarios.run("D");
+
+        // C2 -> blockDestIP (R4.11)
+        assertTrue("R4.11 blockDestIP na c2-01", hasResponse("c2-01", "blockDestIP"));
+
+        // Lateral movement preko deljene SuspiciousIP -> svaki app host je at-risk
+        Map<String, Boolean> diagApp = engine.diagnose("app-01");
+        assertTrue("isSystemAtRisk(app-01)", diagApp.get("isSystemAtRisk"));
+        assertTrue("hasSecurityThreat(app-01)", diagApp.get("hasSecurityThreat"));
+
+        // C2 host -> rizik curenja podataka (c2Activity grana)
+        Map<String, Boolean> diagC2 = engine.diagnose("c2-01");
+        assertTrue("hasDataBreachRisk(c2-01)", diagC2.get("hasDataBreachRisk"));
+
+        // oba incidenta su MEDIUM (Tier 2/3, bez eskalacije do CRITICAL)
+        boolean anyMedium = engine.getAlerts().stream().anyMatch(a -> a.getLevel() == Level.MEDIUM);
+        assertTrue("treba bar jedan MEDIUM alert", anyMedium);
+    }
 }
