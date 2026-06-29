@@ -17,8 +17,10 @@ public class MetricEvent implements Serializable {
         MEMORY_USAGE,
         DISK_USAGE,
         NETWORK_TRAFFIC_MBPS,
+        OUTBOUND_TRAFFIC_MBPS,
         SERVICE_AVAILABILITY,
-        SERVICE_RESPONSE_TIME_MS
+        SERVICE_RESPONSE_TIME_MS,
+        DISK_IO_LATENCY_MS
     }
 
     private static final long serialVersionUID = 1L;

@@ -8,26 +8,26 @@ import org.kie.api.definition.type.Role;
 import org.kie.api.definition.type.Timestamp;
 
 /**
- * Nivo 1 — više neuspešnih prijava u kratkom prozoru (R1.6). Modeluje se kao
- * EVENT jer učestvuje u CEP korelaciji R3.5 (BruteForceAttempt → AnomalousAccess).
+ * Nivo 2 — loginHour van dozvoljenih sati AND failedLogins > 0 (R2.6).
+ * EVENT — učestvuje u CEP korelaciji R3.5 (BruteForceAttempt → AnomalousAccess).
  */
 @Role(Role.Type.EVENT)
 @Timestamp("timestamp")
 @Expires("1h")
-public class BruteForceAttempt implements Serializable {
+public class AnomalousAccess implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     private String hostId;
-    private long failedCount;
+    private String userId;
     private Date timestamp;
 
-    public BruteForceAttempt() {
+    public AnomalousAccess() {
     }
 
-    public BruteForceAttempt(String hostId, long failedCount, Date timestamp) {
+    public AnomalousAccess(String hostId, String userId, Date timestamp) {
         this.hostId = hostId;
-        this.failedCount = failedCount;
+        this.userId = userId;
         this.timestamp = timestamp;
     }
 
@@ -39,12 +39,12 @@ public class BruteForceAttempt implements Serializable {
         this.hostId = hostId;
     }
 
-    public long getFailedCount() {
-        return failedCount;
+    public String getUserId() {
+        return userId;
     }
 
-    public void setFailedCount(long failedCount) {
-        this.failedCount = failedCount;
+    public void setUserId(String userId) {
+        this.userId = userId;
     }
 
     public Date getTimestamp() {
@@ -57,6 +57,6 @@ public class BruteForceAttempt implements Serializable {
 
     @Override
     public String toString() {
-        return "BruteForceAttempt{hostId=" + hostId + ", failedCount=" + failedCount + "}";
+        return "AnomalousAccess{hostId=" + hostId + ", userId=" + userId + "}";
     }
 }

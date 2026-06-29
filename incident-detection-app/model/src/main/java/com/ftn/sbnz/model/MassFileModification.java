@@ -8,26 +8,26 @@ import org.kie.api.definition.type.Role;
 import org.kie.api.definition.type.Timestamp;
 
 /**
- * Nivo 1 — više neuspešnih prijava u kratkom prozoru (R1.6). Modeluje se kao
- * EVENT jer učestvuje u CEP korelaciji R3.5 (BruteForceAttempt → AnomalousAccess).
+ * Nivo 1 — fileModificationRate > 100 files/min (R1.10). EVENT — učestvuje u
+ * CEP korelaciji R3.10 (MassFileModification + ServiceDown + HighCPU).
  */
 @Role(Role.Type.EVENT)
 @Timestamp("timestamp")
-@Expires("1h")
-public class BruteForceAttempt implements Serializable {
+@Expires("30m")
+public class MassFileModification implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     private String hostId;
-    private long failedCount;
+    private int fileCount;
     private Date timestamp;
 
-    public BruteForceAttempt() {
+    public MassFileModification() {
     }
 
-    public BruteForceAttempt(String hostId, long failedCount, Date timestamp) {
+    public MassFileModification(String hostId, int fileCount, Date timestamp) {
         this.hostId = hostId;
-        this.failedCount = failedCount;
+        this.fileCount = fileCount;
         this.timestamp = timestamp;
     }
 
@@ -39,12 +39,12 @@ public class BruteForceAttempt implements Serializable {
         this.hostId = hostId;
     }
 
-    public long getFailedCount() {
-        return failedCount;
+    public int getFileCount() {
+        return fileCount;
     }
 
-    public void setFailedCount(long failedCount) {
-        this.failedCount = failedCount;
+    public void setFileCount(int fileCount) {
+        this.fileCount = fileCount;
     }
 
     public Date getTimestamp() {
@@ -57,6 +57,6 @@ public class BruteForceAttempt implements Serializable {
 
     @Override
     public String toString() {
-        return "BruteForceAttempt{hostId=" + hostId + ", failedCount=" + failedCount + "}";
+        return "MassFileModification{hostId=" + hostId + ", fileCount=" + fileCount + "}";
     }
 }
