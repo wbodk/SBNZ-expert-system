@@ -116,7 +116,10 @@ public class SecurityRulesTest {
         ks.fireAllRules();
 
         SessionPseudoClock clock = ks.getSessionClock();
+        // R2.4 = TrafficSpike (traffic > 500) AND SlowService (responseTime > 3000ms)
         ks.insert(new MetricEvent("web-01", MetricType.NETWORK_TRAFFIC_MBPS, 850.0,
+                new Date(clock.getCurrentTime())));
+        ks.insert(new MetricEvent("web-01", MetricType.SERVICE_RESPONSE_TIME_MS, 4000.0,
                 new Date(clock.getCurrentTime())));
         ks.insert(new MetricEvent("web-01", MetricType.SERVICE_AVAILABILITY, 0.0,
                 new Date(clock.getCurrentTime())));
@@ -194,7 +197,8 @@ public class SecurityRulesTest {
     public void testR46_CriticalAlert_firesAt85() {
         System.out.println("\n--- R4.6 positive: severity = 85 (granica) ---");
         KieSession ks = newSession();
-        ks.insert(new Host("web-01", "web-01.example.com", Tier.TIER_1));
+        // TIER_2 (multiplier 1.0 iz AssetCriticality.xls) — izoluje granicu praga 85
+        ks.insert(new Host("web-01", "web-01.example.com", Tier.TIER_2));
         ks.insert(new IncidentSeverity("web-01", 85));
         ks.fireAllRules();
 
@@ -210,7 +214,8 @@ public class SecurityRulesTest {
     public void testR46_CriticalAlert_doesNotFireAt84() {
         System.out.println("\n--- R4.6 negative: severity = 84 (ispod praga 85) ---");
         KieSession ks = newSession();
-        ks.insert(new Host("web-01", "web-01.example.com", Tier.TIER_1));
+        // TIER_2 (multiplier 1.0) — bez Tier-multiplikatora granica praga ostaje 84 < 85
+        ks.insert(new Host("web-01", "web-01.example.com", Tier.TIER_2));
         ks.insert(new IncidentSeverity("web-01", 84));
         ks.fireAllRules();
 
@@ -251,6 +256,9 @@ public class SecurityRulesTest {
         // DDoS na web-01 — sve tri komponente u 2 min
         clock.advanceTime(84, TimeUnit.SECONDS);
         ks.insert(new MetricEvent("web-01", MetricType.NETWORK_TRAFFIC_MBPS, 850.0,
+                new Date(clock.getCurrentTime())));
+        // SlowService komponenta -> R2.4 PotentialDDoS (TrafficSpike + SlowService)
+        ks.insert(new MetricEvent("web-01", MetricType.SERVICE_RESPONSE_TIME_MS, 5000.0,
                 new Date(clock.getCurrentTime())));
         ks.fireAllRules();
         clock.advanceTime(30, TimeUnit.SECONDS);
