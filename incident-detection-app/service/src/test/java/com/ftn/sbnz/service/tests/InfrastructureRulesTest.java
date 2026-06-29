@@ -207,16 +207,19 @@ public class InfrastructureRulesTest {
     }
 
     @Test
-    public void testR44_MediumAlert_doesNotFireAt29() {
-        System.out.println("\n--- R4.4 negative: severity = 29 (ispod 30) ---");
+    public void testR43_LowAlert_firesBelow30() {
+        // Spec R4.3: severity ∈ (0, 30) -> Alert LOW (a ne "bez alerta").
+        System.out.println("\n--- R4.3 positive: severity = 29 -> LOW ---");
         KieSession ks = newSession();
         ks.insert(new Host("db-01", "db-01.example.com", Tier.TIER_2));
         ks.insert(new IncidentSeverity("db-01", 29));
         ks.fireAllRules();
 
         Collection<?> alerts = ks.getObjects(new ClassObjectFilter(Alert.class));
-        assertEquals("Pri severity=29 ne sme biti Alert-a",
-                0, alerts.size());
+        boolean hasLow = alerts.stream()
+                .map(o -> (Alert) o)
+                .anyMatch(a -> a.getLevel() == Level.LOW && "db-01".equals(a.getHostId()));
+        assertTrue("R4.3 LOW treba da ispali pri severity=29", hasLow);
         ks.dispose();
     }
 
