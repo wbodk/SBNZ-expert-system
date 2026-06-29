@@ -1,0 +1,126 @@
+<div class="app">
+  <header class="topbar">
+    <h1>🛡️ SBNZ — Detekcija incidenata u IT infrastrukturi</h1>
+    <span class="subtitle">Drools expert system · forward chaining · CEP · backward chaining · XLS decision tables</span>
+  </header>
+
+  <div class="toolbar">
+    <label>Scenario:</label>
+    <select [(ngModel)]="selectedScenario">
+      <option *ngFor="let s of scenarios" [value]="s.id">{{ s.id }} — {{ s.name }}</option>
+    </select>
+    <button class="btn primary" (click)="runScenario()" [disabled]="loading">▶ Pokreni scenario</button>
+    <button class="btn" (click)="fire()" [disabled]="loading">🔥 Fire</button>
+    <button class="btn danger" (click)="reset()" [disabled]="loading">↺ Reset</button>
+    <span class="clock" *ngIf="runResult || state">clock: {{ (runResult?.clock ?? state?.clock) }} ms</span>
+    <span class="spinner" *ngIf="loading">…</span>
+  </div>
+
+  <p class="scenario-desc" *ngIf="selectedInfo">{{ selectedInfo.description }}</p>
+  <div class="error" *ngIf="error">{{ error }}</div>
+  <div class="banner" *ngIf="runResult">
+    Scenario <b>{{ runResult.scenarioId }} — {{ runResult.scenarioName }}</b> pokrenut:
+    {{ runResult.firedRules }} aktivacija pravila.
+  </div>
+
+  <div class="grid">
+    <!-- ALERTS -->
+    <section class="card">
+      <h2>🚨 Alerti</h2>
+      <p class="muted" *ngIf="alerts.length === 0">Nema alerta.</p>
+      <table *ngIf="alerts.length > 0">
+        <thead><tr><th>Host</th><th>Nivo</th><th>Severity</th><th>Opis</th></tr></thead>
+        <tbody>
+          <tr *ngFor="let a of alerts">
+            <td>{{ a.hostId }}</td>
+            <td><span [class]="levelClass(a.level)">{{ a.level }}</span></td>
+            <td>{{ a.severity }}</td>
+            <td class="desc">{{ a.description }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- SEVERITY -->
+    <section class="card">
+      <h2>📊 Severity po hostu</h2>
+      <p class="muted" *ngIf="severities.length === 0">Nema podataka.</p>
+      <div class="sev-row" *ngFor="let s of severities">
+        <span class="sev-host">{{ s.hostId }}</span>
+        <div class="sev-bar"><div class="sev-fill" [style.width.%]="severityPct(s.score)"></div></div>
+        <span class="sev-score">{{ s.score }}</span>
+      </div>
+    </section>
+
+    <!-- RESPONSE ACTIONS -->
+    <section class="card">
+      <h2>⚙️ Automatske akcije</h2>
+      <p class="muted" *ngIf="responseActions.length === 0">Nema akcija.</p>
+      <ul class="actions">
+        <li *ngFor="let r of responseActions">
+          <code>{{ r.action }}</code> <span class="muted">({{ r.hostId }})</span> — {{ r.detail }}
+        </li>
+      </ul>
+    </section>
+
+    <!-- DIAGNOSIS (scenario mode) -->
+    <section class="card wide" *ngIf="runResult">
+      <h2>🔎 Backward-chaining dijagnoza</h2>
+      <div *ngFor="let host of diagnosisHosts" class="diag-host">
+        <h3>{{ host }}</h3>
+        <div class="chips">
+          <span *ngFor="let q of queryEntries(hostDiagnosis(host)!.queries)"
+                class="chip" [class.on]="q.value" [class.off]="!q.value">
+            {{ queryLabels[q.key] || q.key }}: {{ q.value ? 'DA' : 'ne' }}
+          </span>
+        </div>
+        <div class="whynot" *ngIf="hostDiagnosis(host)!.whyNotRansomware.length > 0">
+          <b>Why-not (ransomware):</b> nedostaju uslovi —
+          <span *ngFor="let f of hostDiagnosis(host)!.whyNotRansomware" class="missing">{{ f.id }}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- MANUAL MODE -->
+    <section class="card wide">
+      <h2>🧪 Ručni unos i upit</h2>
+      <div class="manual">
+        <div class="form-block">
+          <h4>Dodaj host</h4>
+          <input [(ngModel)]="manualHost.id" placeholder="id">
+          <select [(ngModel)]="manualHost.tier">
+            <option *ngFor="let t of tiers" [value]="t">{{ t }}</option>
+          </select>
+          <input [(ngModel)]="manualHost.serviceClass" placeholder="serviceClass (web/db/...)">
+          <input [(ngModel)]="manualHost.complianceTag" placeholder="compliance (PCI...)">
+          <button class="btn" (click)="addHost()" [disabled]="loading">+ Host</button>
+        </div>
+        <div class="form-block">
+          <h4>Dodaj metriku</h4>
+          <input [(ngModel)]="manualMetric.hostId" placeholder="hostId">
+          <select [(ngModel)]="manualMetric.metricType">
+            <option *ngFor="let m of metricTypes" [value]="m">{{ m }}</option>
+          </select>
+          <input type="number" [(ngModel)]="manualMetric.value" placeholder="value">
+          <button class="btn" (click)="addMetric()" [disabled]="loading">+ Metrika</button>
+        </div>
+        <div class="form-block">
+          <h4>Dijagnoza hosta</h4>
+          <input [(ngModel)]="diagnoseHost" placeholder="hostId">
+          <button class="btn" (click)="doDiagnose()" [disabled]="loading">? Dijagnostikuj</button>
+          <div class="chips" *ngIf="manualDiagnosis">
+            <span *ngFor="let q of queryEntries(manualDiagnosis)"
+                  class="chip" [class.on]="q.value" [class.off]="!q.value">
+              {{ queryLabels[q.key] || q.key }}: {{ q.value ? 'DA' : 'ne' }}
+            </span>
+          </div>
+          <div class="whynot" *ngIf="manualWhyNot.length > 0">
+            <b>Why-not (ransomware):</b>
+            <span *ngFor="let f of manualWhyNot" class="missing">{{ f.id }}</span>
+          </div>
+        </div>
+      </div>
+      <p class="hint">Ručni tok: dodaj host(ove) i činjenice → <b>Fire</b> → pogledaj alerte i dijagnozu.</p>
+    </section>
+  </div>
+</div>
