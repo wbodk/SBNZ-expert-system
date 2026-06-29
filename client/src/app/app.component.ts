@@ -30,6 +30,13 @@ export class AppComponent implements OnInit {
   metricTypes = ['CPU_USAGE', 'MEMORY_USAGE', 'DISK_USAGE', 'NETWORK_TRAFFIC_MBPS',
     'OUTBOUND_TRAFFIC_MBPS', 'SERVICE_AVAILABILITY', 'SERVICE_RESPONSE_TIME_MS', 'DISK_IO_LATENCY_MS'];
   tiers = ['TIER_1', 'TIER_2', 'TIER_3'];
+  serviceClasses = ['web', 'db', 'cache', 'batch'];
+  complianceTags = [
+    { value: '', label: '(bez compliance)' },
+    { value: 'PCI', label: 'PCI' },
+    { value: 'HIPAA', label: 'HIPAA' },
+    { value: 'SOX', label: 'SOX' }
+  ];
 
   // dijagnoza (ručni mod)
   diagnoseHost = 'srv-01';
@@ -146,7 +153,7 @@ export class AppComponent implements OnInit {
   private fail(e: any): void { this.error = this.fmtErr(e); this.loading = false; }
   private fmtErr(e: any): string {
     return e?.status === 0
-      ? 'Nije moguće povezati se sa servisom (http://localhost:8080). Da li je backend pokrenut?'
+      ? 'Nije moguće povezati se sa REST servisom (/api). Da li je backend pokrenut?'
       : (e?.message ?? 'Greška');
   }
 }

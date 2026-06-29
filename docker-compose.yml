@@ -1,0 +1,22 @@
+# SBNZ — detekcija incidenata: backend (Spring Boot + Drools) + frontend (Angular/nginx)
+#
+#   docker compose up --build
+#   -> klijent:  http://localhost:4200
+#   -> REST API: http://localhost:8080/api  (klijent ga zove kroz nginx proxy /api)
+
+services:
+  backend:
+    build:
+      context: ./incident-detection-app
+    image: sbnz-backend
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./client
+    image: sbnz-frontend
+    ports:
+      - "4200:80"
+    depends_on:
+      - backend

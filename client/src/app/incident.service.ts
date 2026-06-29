@@ -9,7 +9,9 @@ import {
 @Injectable({ providedIn: 'root' })
 export class IncidentService {
 
-  private readonly base = 'http://localhost:8080/api';
+  // Relativna putanja: u dev-u ide kroz proxy.conf.json, u Docker-u kroz nginx
+  // (oba prosleđuju na backend :8080) — pa nema CORS problema.
+  private readonly base = '/api';
 
   constructor(private http: HttpClient) {}
 

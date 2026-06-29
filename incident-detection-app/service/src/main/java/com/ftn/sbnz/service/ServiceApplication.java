@@ -5,7 +5,6 @@ import java.util.Arrays;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.kie.api.KieServices;
-import org.kie.api.builder.KieScanner;
 import org.kie.api.runtime.KieContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -32,11 +31,8 @@ public class ServiceApplication  {
 
 	@Bean
 	public KieContainer kieContainer() {
-		KieServices ks = KieServices.Factory.get();
-		KieContainer kContainer = ks
-				.newKieContainer(ks.newReleaseId("com.ftn.sbnz", "rules", "0.0.1-SNAPSHOT"));
-		KieScanner kScanner = ks.newKieScanner(kContainer);
-		kScanner.start(1000);
-		return kContainer;
+		// Classpath kontejner — kbase se učitava iz rules jar-a na klasapatu
+		// (radi i u Spring Boot fat jar-u / Docker-u, bez potrebe za ~/.m2 ili KieScanner-om).
+		return KieServices.Factory.get().newKieClasspathContainer();
 	}
 }
